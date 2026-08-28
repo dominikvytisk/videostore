@@ -3,6 +3,9 @@
 <p align="center">
   <a href="https://github.com/dominikvytisk/videostore/actions/workflows/tests.yml"><img src="https://github.com/dominikvytisk/videostore/actions/workflows/tests.yml/badge.svg" alt="tests"></a>
   <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python 3.9+">
+  <a href="https://github.com/dominikvytisk/videostore/stargazers"><img src="https://img.shields.io/github/stars/dominikvytisk/videostore" alt="GitHub stars"></a>
+  <a href="https://github.com/dominikvytisk/videostore/issues"><img src="https://img.shields.io/github/issues/dominikvytisk/videostore" alt="open issues"></a>
+  <img src="https://img.shields.io/github/last-commit/dominikvytisk/videostore" alt="last commit">
 </p>
 
 <p align="center">
