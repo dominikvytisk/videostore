@@ -1,6 +1,11 @@
 # videostore
 
 <p align="center">
+  <a href="https://github.com/dominikvytisk/videostore/actions/workflows/tests.yml"><img src="https://github.com/dominikvytisk/videostore/actions/workflows/tests.yml/badge.svg" alt="tests"></a>
+  <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python 3.9+">
+</p>
+
+<p align="center">
   <img src="assets/hero.png" alt="videostore: turn any file into a YouTube video and get it back byte-for-byte. Shows the encode/decode pipeline (archive → compress → encrypt → FEC → modulate → YouTube → demodulate → FEC → decrypt → decompress → extract) and the web UI's Encode and Decode screens." width="920">
 </p>
 
