@@ -1,0 +1,70 @@
+name: Bug report
+description: Something didn't encode, didn't decode, or produced the wrong result.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: check [docs/troubleshooting.md](../../docs/troubleshooting.md) — a lot of "decode failed" cases are covered there with an explanation of why.
+
+  - type: dropdown
+    id: channel
+    attributes:
+      label: Where did this happen?
+      description: This matters a lot here — see docs/youtube-channel.md for why.
+      options:
+        - A real YouTube upload → download round trip
+        - The local channel simulator (`test-channel` / `benchmark`)
+        - No channel at all (plain encode → decode, no transcoding involved)
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you expected vs. what actually happened. Full error text/traceback if there was one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce it
+      description: The exact command(s) you ran, or the steps in the web UI.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: profile
+    attributes:
+      label: Profile / resolution / codec used
+      placeholder: e.g. --profile youtube-safe --resolution 1080p --codec libx264
+
+  - type: textarea
+    id: decode-report
+    attributes:
+      label: Decode report (if it got that far)
+      description: The `fec_stats` / `archive_checksum_ok` / `payload_frames_present` output from the CLI or web UI, if you have it.
+      render: text
+
+  - type: input
+    id: version
+    attributes:
+      label: videostore version / commit
+      placeholder: e.g. output of `pip show videostore`, or the commit hash
+
+  - type: input
+    id: ffmpeg-version
+    attributes:
+      label: ffmpeg version
+      description: Output of `ffmpeg -version` (first line is enough)
+
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: e.g. macOS 15, Ubuntu 24.04

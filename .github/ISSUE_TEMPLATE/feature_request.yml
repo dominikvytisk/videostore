@@ -1,0 +1,28 @@
+name: Feature request
+description: Propose a new modulation scheme, FEC code, CLI flag, or anything else.
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        See [docs/development.md](../../docs/development.md) for how each layer (modulation, FEC, compression, video codec) is meant to be swapped in independently — a lot of ideas fit as a new implementation behind an existing interface rather than a core change.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's the problem or gap?
+      description: What can't you currently do, or what's missing?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What you'd want to see. If it's a new modulation/FEC scheme, any measured or expected numbers you have are especially useful, this project runs on measurement over assumption (see docs/benchmarking.md).
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Troubleshooting guide
+    url: https://github.com/dominikvytisk/videostore/blob/main/docs/troubleshooting.md
+    about: Known limitations and likely causes for common failures, check here first.
+  - name: Documentation
+    url: https://github.com/dominikvytisk/videostore/tree/main/docs
+    about: Architecture, protocol, benchmarking methodology, security model.
