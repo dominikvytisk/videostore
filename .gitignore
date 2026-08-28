@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Test / tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Scratch / local working files (not part of the shipped project)
+scratch/
+
+# Benchmark run output (regenerate with `videostore benchmark`)
+benchmark-results/

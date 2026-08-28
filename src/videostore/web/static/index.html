@@ -1,0 +1,906 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>videostore</title>
+<style>
+  :root {
+    --bg: #060607; --panel: #0d0e11; --panel2: #131418; --line: #232429; --line2: #2c2e35;
+    --text: #f3f2ee; --dim: #86868c; --dim2: #55565c;
+    --signal: #ff3459; --signal-dim: #7a1c2c;
+    --data: #39ff8e; --data-dim: #14602f;
+    --warn: #ffb648;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); }
+  body {
+    margin: 0; font-family: var(--sans); color: var(--text); min-height: 100vh;
+    position: relative; overflow-x: hidden;
+  }
+  #noise {
+    position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0;
+    opacity: .05; mix-blend-mode: overlay; image-rendering: pixelated; pointer-events: none;
+  }
+  .scanlines {
+    position: fixed; inset: 0; z-index: 1; pointer-events: none;
+    background: repeating-linear-gradient(0deg, rgba(255,255,255,.5) 0px, transparent 1px, transparent 3px);
+    opacity: .025; mix-blend-mode: overlay;
+  }
+  .vignette {
+    position: fixed; inset: 0; z-index: 1; pointer-events: none;
+    background: radial-gradient(120% 100% at 50% 0%, transparent 55%, rgba(0,0,0,.55) 100%);
+  }
+  main { position: relative; z-index: 2; }
+  @keyframes blink { 0%, 45% { opacity: 1; } 50%, 100% { opacity: .15; } }
+
+  main { max-width: 980px; margin: 0 auto; padding: 3rem 2rem 6rem; }
+
+  .banner {
+    font-family: var(--mono); font-size: .74rem; line-height: 1.55; color: var(--dim);
+    border-left: 2px solid var(--signal); background: linear-gradient(90deg, rgba(255,52,89,.06), transparent 60%);
+    padding: .7rem 1rem; margin-bottom: 1.6rem;
+  }
+  .banner b { color: var(--text); }
+
+  .tabs { display: flex; gap: 0; margin-bottom: 1.6rem; border-bottom: 1px solid var(--line); }
+  .tab {
+    background: none; border: none; cursor: pointer; color: var(--dim); font-family: var(--sans);
+    font-weight: 700; font-size: .82rem; letter-spacing: .06em; text-transform: uppercase;
+    padding: .7rem 1.1rem; position: relative; display: flex; align-items: center; gap: .5rem;
+  }
+  .tab .idx { font-family: var(--mono); color: var(--dim2); font-weight: 400; font-size: .74rem; }
+  .tab.active { color: var(--text); }
+  .tab.active::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
+    background: var(--signal); box-shadow: 0 0 10px var(--signal);
+  }
+  .panel { display: none; }
+  .panel.active { display: block; animation: fadein .2s ease; }
+  @keyframes fadein { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+
+  .card {
+    background: linear-gradient(180deg, var(--panel), #0a0b0d);
+    border: 1px solid var(--line); border-radius: 6px; padding: 1.3rem 1.4rem; margin-bottom: 1rem;
+  }
+  .card-head {
+    display: flex; align-items: baseline; justify-content: space-between; margin-bottom: .9rem;
+    padding-bottom: .7rem; border-bottom: 1px solid var(--line);
+  }
+  .card-head h2 {
+    font-size: .76rem; margin: 0; letter-spacing: .1em; text-transform: uppercase; font-weight: 700; color: var(--dim);
+  }
+  .card-head .meta { font-family: var(--mono); font-size: .72rem; color: var(--dim2); }
+
+  .grid-2 { display: grid; grid-template-columns: 1.55fr 1fr; gap: 1rem; align-items: start; }
+  @media (max-width: 760px) { .grid-2 { grid-template-columns: 1fr; } }
+
+  /* ---------- file explorer ---------- */
+  .explorer-toolbar { display: flex; gap: .5rem; margin-bottom: .8rem; }
+  .btn {
+    padding: .4rem .8rem; border-radius: 4px; border: 1px solid var(--line2);
+    background: var(--panel2); color: var(--text); cursor: pointer; font-size: .74rem; font-weight: 600;
+    letter-spacing: .03em; text-transform: uppercase; font-family: var(--sans);
+    transition: border-color .12s ease, transform .08s ease;
+  }
+  .btn:hover { border-color: var(--signal); }
+  .btn:active { transform: translateY(1px); }
+  .btn.ghost { background: transparent; color: var(--dim); border-color: transparent; }
+  .btn.ghost:hover { color: var(--signal); }
+
+  .dropzone {
+    border: 1px dashed var(--line2); border-radius: 6px; padding: 2rem 1rem;
+    text-align: center; color: var(--dim); cursor: pointer; transition: border-color .15s ease, background .15s ease;
+    position: relative; overflow: hidden;
+  }
+  .dropzone::before {
+    content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,52,89,.5), transparent);
+    width: 40%; transform: translateX(-150%); transition: none;
+  }
+  .dropzone.drag { border-color: var(--signal); background: rgba(255,52,89,.05); color: var(--text); }
+  .dropzone.drag::before { animation: sweep 1s linear infinite; }
+  @keyframes sweep { from { transform: translateX(-150%); } to { transform: translateX(350%); } }
+  .dropzone svg { width: 26px; height: 26px; margin-bottom: .5rem; opacity: .7; }
+  .dropzone .big { font-size: .84rem; font-weight: 700; color: var(--text); margin-bottom: .15rem; letter-spacing: .02em; }
+  .dropzone .small { font-family: var(--mono); font-size: .72rem; }
+
+  .file-list { margin-top: .7rem; }
+  .file-row {
+    display: flex; align-items: center; gap: .65rem; padding: .42rem .3rem;
+    border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: .78rem;
+  }
+  .file-row:last-child { border-bottom: none; }
+  .file-row .ficon { width: 15px; height: 15px; flex-shrink: 0; color: var(--dim); }
+  .file-row .fname { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .file-row .fpath { color: var(--dim2); }
+  .file-row .fleader { flex: 1; border-bottom: 1px dotted var(--line2); height: 1px; margin: 0 .4rem; align-self: center; min-width: 12px; }
+  .file-row .fsize { color: var(--dim); min-width: 62px; text-align: right; }
+  .file-row .fremove {
+    width: 18px; height: 18px; border: none; background: transparent; color: var(--dim2); cursor: pointer;
+    font-family: var(--mono); font-size: .8rem; flex-shrink: 0;
+  }
+  .file-row .fremove:hover { color: var(--signal); }
+  .file-list-footer {
+    display: flex; justify-content: space-between; font-family: var(--mono); font-size: .72rem; color: var(--dim2);
+    padding-top: .6rem; margin-top: .3rem;
+  }
+  input[type=file] { display: none; }
+
+  /* ---------- forms ---------- */
+  label {
+    display: block; font-family: var(--mono); font-size: .68rem; color: var(--dim); letter-spacing: .04em;
+    text-transform: uppercase; margin: .85rem 0 .3rem;
+  }
+  label:first-child { margin-top: 0; }
+  input[type=text], input[type=password], input[type=number], select {
+    width: 100%; padding: .5rem .6rem; border-radius: 4px; border: 1px solid var(--line2);
+    background: #08090b; color: var(--text); font-size: .84rem; font-family: var(--mono);
+  }
+  input:focus, select:focus { outline: none; border-color: var(--signal); }
+  select { appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--dim) 50%), linear-gradient(135deg, var(--dim) 50%, transparent 50%); background-position: calc(100% - 16px) center, calc(100% - 11px) center; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: .8rem; }
+  .hint { font-family: var(--mono); font-size: .7rem; color: var(--dim2); margin-top: .3rem; line-height: 1.5; }
+  .checkbox-row { display: flex; align-items: center; gap: .55rem; margin-top: 1rem; }
+  .checkbox-row input { width: 15px; height: 15px; accent-color: var(--signal); }
+  .checkbox-row label { margin: 0; color: var(--text); font-size: .78rem; text-transform: none; font-family: var(--sans); }
+  #encPassword, #decPasswordWrap, #decUrlWrap { display: none; }
+
+  button.primary {
+    width: 100%; padding: .85rem; border: none; border-radius: 4px; margin: 1.1rem 0;
+    background: var(--signal); color: #17040a; font-size: .85rem; font-weight: 800; cursor: pointer;
+    letter-spacing: .08em; text-transform: uppercase; font-family: var(--sans);
+    box-shadow: 0 0 0 1px var(--signal-dim), 0 8px 24px rgba(255,52,89,.18);
+    transition: filter .1s ease, transform .06s ease;
+  }
+  button.primary:hover:not(:disabled) { filter: brightness(1.12); }
+  button.primary:active:not(:disabled) { transform: translateY(1px); }
+  button.primary:disabled { opacity: .35; cursor: default; box-shadow: none; }
+
+  /* ---------- pipeline readout ---------- */
+  .stepper { display: flex; flex-direction: column; }
+  .step {
+    display: flex; align-items: center; gap: .6rem; padding: .38rem 0; font-family: var(--mono); font-size: .78rem;
+  }
+  .step .step-idx { color: var(--dim2); width: 1.4rem; flex-shrink: 0; }
+  .step .step-label { color: var(--dim2); letter-spacing: .03em; white-space: nowrap; }
+  .step .step-leader { flex: 1; border-bottom: 1px dotted var(--line); height: 1px; margin: 0 .4rem; align-self: center; }
+  .step .step-status { width: 1rem; text-align: center; color: var(--dim2); flex-shrink: 0; }
+  .step.active .step-label, .step.done .step-label { color: var(--text); }
+  .step.active .step-status { color: var(--signal); animation: blink 1s steps(1) infinite; }
+  .step.done .step-status { color: var(--data); }
+
+  .status { margin-top: .8rem; font-family: var(--mono); font-size: .78rem; }
+  .status.ok { color: var(--data); }
+  .status.bad { color: var(--signal); }
+
+  .readout table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: .78rem; }
+  .readout td { padding: .38rem .1rem; border-bottom: 1px solid var(--line); }
+  .readout td:first-child { color: var(--dim); white-space: nowrap; }
+  .readout td:last-child { text-align: right; color: var(--text); }
+  .readout tr:last-child td { border-bottom: none; }
+
+  .pill {
+    display: inline-block; padding: .1rem .55rem; border-radius: 3px; font-size: .68rem; font-weight: 700;
+    font-family: var(--mono); letter-spacing: .04em; text-transform: uppercase;
+  }
+  .pill.ok { background: rgba(57,255,142,.1); color: var(--data); }
+  .pill.bad { background: rgba(255,52,89,.1); color: var(--signal); }
+
+  .monitor { border: 1px solid var(--line2); border-radius: 6px; padding: 6px; margin-top: 1rem; position: relative; background: #000; }
+  .monitor::before {
+    content: "PREVIEW"; position: absolute; top: 12px; left: 12px; z-index: 1; font-family: var(--mono);
+    font-size: .62rem; letter-spacing: .1em; color: rgba(255,255,255,.55); background: rgba(0,0,0,.5);
+    padding: .1rem .4rem; border-radius: 2px;
+  }
+  video.preview { width: 100%; border-radius: 3px; display: block; background: #000; }
+
+  a.download-link, button.download-link {
+    display: inline-flex; align-items: center; gap: .5rem; margin-top: 1.1rem; padding: .65rem 1.2rem;
+    border-radius: 4px; background: var(--data); color: #06210f; font-weight: 800; text-decoration: none;
+    font-size: .8rem; letter-spacing: .05em; text-transform: uppercase; font-family: var(--sans);
+    border: none; cursor: pointer; box-shadow: 0 8px 24px rgba(57,255,142,.15);
+  }
+  a.download-link:hover { filter: brightness(1.1); }
+
+  .segmented { display: flex; border: 1px solid var(--line2); border-radius: 4px; overflow: hidden; }
+  .segmented div {
+    flex: 1; text-align: center; padding: .5rem; font-size: .75rem; cursor: pointer; color: var(--dim);
+    font-family: var(--mono); letter-spacing: .04em; text-transform: uppercase; transition: background .12s ease;
+  }
+  .segmented div.active { background: var(--panel2); color: var(--text); box-shadow: inset 0 -2px 0 var(--signal); }
+
+  /* ---------- file explorer: clickable rows + per-file download + preview ---------- */
+  .file-row.clickable { cursor: pointer; }
+  .file-row.clickable:hover { background: var(--panel2); }
+  .file-row.clickable:hover .fname { color: var(--signal); }
+  .frow-download {
+    width: 22px; height: 22px; flex-shrink: 0; border-radius: 3px; color: var(--dim);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .frow-download svg { width: 13px; height: 13px; }
+  .frow-download:hover { color: var(--data); background: rgba(57,255,142,.08); }
+
+  .preview-modal {
+    display: none; position: fixed; inset: 0; z-index: 50; align-items: center; justify-content: center;
+    padding: 4vh 4vw; background: rgba(4,4,6,.78); backdrop-filter: blur(3px);
+  }
+  .preview-modal.open { display: flex; }
+  .preview-box {
+    width: 100%; max-width: 860px; max-height: 90vh; display: flex; flex-direction: column;
+    background: var(--panel); border: 1px solid var(--line2); border-radius: 6px; overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0,0,0,.5);
+  }
+  .preview-head {
+    display: flex; align-items: center; gap: .8rem; padding: .8rem 1rem; border-bottom: 1px solid var(--line);
+  }
+  .preview-head .ptitle { font-family: var(--mono); font-size: .82rem; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preview-head .pmeta { font-family: var(--mono); font-size: .72rem; color: var(--dim2); }
+  .preview-head a, .preview-head button {
+    width: 26px; height: 26px; border-radius: 4px; border: 1px solid var(--line2); background: var(--panel2);
+    color: var(--dim); display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0;
+  }
+  .preview-head a svg, .preview-head button svg { width: 13px; height: 13px; }
+  .preview-head a:hover { color: var(--data); border-color: var(--data); }
+  .preview-head button:hover { color: var(--signal); border-color: var(--signal); }
+  .preview-body { padding: 0; overflow: auto; background: #000; display: flex; align-items: center; justify-content: center; min-height: 200px; }
+  .preview-body img { max-width: 100%; max-height: 80vh; display: block; }
+  .preview-body video { max-width: 100%; max-height: 80vh; display: block; }
+  .preview-frame { width: 100%; height: 78vh; border: none; }
+  .preview-text {
+    width: 100%; margin: 0; padding: 1.1rem 1.3rem; font-family: var(--mono); font-size: .78rem; line-height: 1.6;
+    color: #d7e8dc; background: #08090b; white-space: pre-wrap; word-break: break-word; text-align: left;
+    max-height: 78vh; overflow: auto;
+  }
+  .preview-audio-wrap { display: flex; flex-direction: column; align-items: center; gap: 1rem; padding: 3rem 2rem; color: var(--dim); }
+  .preview-audio-wrap svg { width: 48px; height: 48px; }
+  .preview-none { display: flex; flex-direction: column; align-items: center; gap: .8rem; padding: 3rem 2rem; color: var(--dim); font-family: var(--mono); font-size: .78rem; text-align: center; }
+  .preview-none svg { width: 40px; height: 40px; opacity: .5; }
+  .preview-none code { color: var(--text); }
+  .preview-loading { padding: 3rem; color: var(--dim); font-family: var(--mono); font-size: .8rem; }
+</style>
+</head>
+<body>
+<canvas id="noise"></canvas>
+<div class="scanlines"></div>
+<div class="vignette"></div>
+
+<main>
+  <div class="banner">
+    <b>This runs entirely on your machine.</b> Nothing here uploads to
+    YouTube — encode a payload below, upload the resulting <code>.mp4</code>
+    yourself, then drop the downloaded video (or a link) into
+    <b>Decode</b> to get your files back.
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="encode"><span class="idx">01</span>Encode</button>
+    <button class="tab" data-tab="decode"><span class="idx">02</span>Decode</button>
+  </div>
+
+  <!-- ==================== ENCODE ==================== -->
+  <section class="panel active" id="panel-encode">
+    <div class="grid-2">
+      <div>
+        <div class="card">
+          <div class="card-head"><h2>Source files</h2><span class="meta" id="fileMeta">0 items</span></div>
+          <div class="explorer-toolbar">
+            <button class="btn" id="btnAddFiles">+ Add files</button>
+            <button class="btn" id="btnAddFolder">+ Add folder</button>
+            <button class="btn ghost" id="btnClear">Clear</button>
+          </div>
+          <input type="file" id="fileInput" multiple>
+          <input type="file" id="folderInput" webkitdirectory multiple>
+
+          <div class="dropzone" id="dropzone">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <div class="big">Drop files or a folder</div>
+            <div class="small">or click to browse</div>
+          </div>
+          <div class="file-list" id="fileList"></div>
+          <div class="file-list-footer" id="fileListFooter" style="display:none">
+            <span id="fileCount"></span><span id="fileTotalSize"></span>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="card">
+          <div class="card-head"><h2>Settings</h2></div>
+          <div class="row2">
+            <div><label>Resolution</label><select id="encResolution"></select></div>
+            <div><label>Profile</label><select id="encProfile"></select></div>
+          </div>
+          <div class="hint" id="profileHint"></div>
+
+          <div class="row2">
+            <div><label>Codec</label>
+              <select id="encCodec">
+                <option value="libx264" selected>H.264</option>
+                <option value="libx265">H.265</option>
+                <option value="libsvtav1">AV1</option>
+              </select>
+            </div>
+            <div><label>CRF</label><input type="number" id="encCrf" value="18" min="0" max="51"></div>
+          </div>
+          <div class="row2">
+            <div><label>Compression</label>
+              <select id="encCompression">
+                <option value="auto" selected>auto</option>
+                <option value="zstd">zstd</option>
+                <option value="none">none</option>
+              </select>
+            </div>
+            <div><label>ffmpeg preset</label>
+              <select id="encPreset">
+                <option value="ultrafast">ultrafast</option>
+                <option value="fast">fast</option>
+                <option value="medium" selected>medium</option>
+                <option value="slow">slow</option>
+              </select>
+            </div>
+          </div>
+          <label>Modulation</label>
+          <select id="encModulation">
+            <option value="" selected>default — luminance-block</option>
+            <option value="dct-pair">dct-pair (experimental)</option>
+          </select>
+
+          <div class="checkbox-row">
+            <input type="checkbox" id="encEncrypt">
+            <label for="encEncrypt">Encrypt with a password</label>
+          </div>
+          <input type="password" id="encPassword" placeholder="Password" style="margin-top:.5rem">
+        </div>
+      </div>
+    </div>
+
+    <button class="primary" id="encSubmit">▶ Encode</button>
+
+    <div class="card readout" id="encProgressCard" style="display:none">
+      <div class="card-head"><h2>Pipeline</h2></div>
+      <div class="stepper" id="encStepper"></div>
+      <div class="status" id="encStatus"></div>
+    </div>
+
+    <div id="encResult"></div>
+  </section>
+
+  <!-- ==================== DECODE ==================== -->
+  <section class="panel" id="panel-decode">
+    <div class="card">
+      <div class="card-head"><h2>Source video</h2></div>
+      <div class="segmented" id="decSourceToggle">
+        <div class="active" data-src="file">Upload file</div>
+        <div data-src="url">YouTube link</div>
+      </div>
+
+      <div id="decFileWrap" style="margin-top:1rem">
+        <input type="file" id="decFileInput" accept="video/*">
+        <div class="dropzone" id="decDropzone">
+          <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="6" width="13" height="12" rx="2" stroke="currentColor" stroke-width="1.6"/><path d="M16 10l5-3v10l-5-3" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+          <div class="big">Drop a video file</div>
+          <div class="small">or click to browse</div>
+        </div>
+        <div class="file-list" id="decFileList"></div>
+      </div>
+
+      <div id="decUrlWrap">
+        <label>YouTube URL</label>
+        <input type="text" id="decYoutubeUrl" placeholder="https://youtube.com/watch?v=...">
+        <div class="hint">Downloads the best available quality with yt-dlp, locally. Never uploads anything.</div>
+      </div>
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="decEncrypted">
+        <label for="decEncrypted">This video is encrypted</label>
+      </div>
+      <div id="decPasswordWrap"><input type="password" id="decPassword" placeholder="Password" style="margin-top:.5rem"></div>
+    </div>
+
+    <button class="primary" id="decSubmit">▶ Decode</button>
+
+    <div class="card readout" id="decProgressCard" style="display:none">
+      <div class="card-head"><h2>Pipeline</h2></div>
+      <div class="stepper" id="decStepper"></div>
+      <div class="status" id="decStatus"></div>
+    </div>
+
+    <div id="decResult"></div>
+  </section>
+</main>
+
+<div class="preview-modal" id="previewModal">
+  <div class="preview-box">
+    <div class="preview-head">
+      <span class="ptitle" id="previewTitle"></span>
+      <span class="pmeta" id="previewMeta"></span>
+      <a id="previewDownload" href="#" download title="Download"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 20h16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+      <button id="previewClose" title="Close"><svg viewBox="0 0 24 24" fill="none"><path d="M5 5l14 14M19 5L5 19" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+    </div>
+    <div class="preview-body" id="previewBody"></div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const wsProto = location.protocol === "https:" ? "wss" : "ws";
+
+/* ---------------- background noise ---------------- */
+(function () {
+  const c = $("noise"), ctx = c.getContext("2d");
+  const NW = 160, NH = 90;
+  c.width = NW; c.height = NH;
+  function draw() {
+    const img = ctx.createImageData(NW, NH);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const v = Math.random() * 255;
+      img.data[i] = v; img.data[i+1] = v; img.data[i+2] = v; img.data[i+3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+  draw();
+  setInterval(draw, 130);
+})();
+
+/* ---------------- tabs ---------------- */
+document.querySelectorAll(".tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+    document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+    tab.classList.add("active");
+    $("panel-" + tab.dataset.tab).classList.add("active");
+  });
+});
+
+$("encEncrypt").addEventListener("change", e => { $("encPassword").style.display = e.target.checked ? "block" : "none"; });
+$("decEncrypted").addEventListener("change", e => { $("decPasswordWrap").style.display = e.target.checked ? "block" : "none"; });
+
+$("previewClose").addEventListener("click", closePreview);
+$("previewModal").addEventListener("click", e => { if (e.target.id === "previewModal") closePreview(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") closePreview(); });
+
+document.querySelectorAll("#decSourceToggle div").forEach(seg => {
+  seg.addEventListener("click", () => {
+    document.querySelectorAll("#decSourceToggle div").forEach(s => s.classList.remove("active"));
+    seg.classList.add("active");
+    const isFile = seg.dataset.src === "file";
+    $("decFileWrap").style.display = isFile ? "block" : "none";
+    $("decUrlWrap").style.display = isFile ? "none" : "block";
+  });
+});
+
+function fmtBytes(n) {
+  if (n > 1e9) return (n/1e9).toFixed(2) + " GB";
+  if (n > 1e6) return (n/1e6).toFixed(2) + " MB";
+  if (n > 1e3) return (n/1e3).toFixed(1) + " KB";
+  return n + " B";
+}
+
+/* ---------------- icons (inline svg, currentColor) ---------------- */
+const SVG = {
+  generic: '<svg viewBox="0 0 24 24" fill="none"><path d="M6 2h9l5 5v15H6V2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M15 2v5h5" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+  image: '<svg viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="16" rx="2" stroke="currentColor" stroke-width="1.4"/><circle cx="9" cy="10" r="1.6" stroke="currentColor" stroke-width="1.4"/><path d="M21 16l-5.5-5.5L6 20" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+  video: '<svg viewBox="0 0 24 24" fill="none"><rect x="3" y="6" width="13" height="12" rx="2" stroke="currentColor" stroke-width="1.4"/><path d="M16 10l5-3v10l-5-3" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+  audio: '<svg viewBox="0 0 24 24" fill="none"><path d="M9 18V5l11-2v13" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><circle cx="6" cy="18" r="3" stroke="currentColor" stroke-width="1.4"/><circle cx="17" cy="16" r="3" stroke="currentColor" stroke-width="1.4"/></svg>',
+  archive: '<svg viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="18" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/><path d="M5 8v11a2 2 0 002 2h10a2 2 0 002-2V8" stroke="currentColor" stroke-width="1.4"/><path d="M10 12h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+  code: '<svg viewBox="0 0 24 24" fill="none"><path d="M9 8l-4 4 4 4M15 8l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  warn: '<svg viewBox="0 0 24 24" fill="none"><path d="M12 3l10 18H2L12 3z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M12 10v4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="12" cy="17" r=".8" fill="currentColor"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 20h16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  close: '<svg viewBox="0 0 24 24" fill="none"><path d="M5 5l14 14M19 5L5 19" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+};
+const EXT_ICON = {
+  jpg:"image",jpeg:"image",png:"image",gif:"image",webp:"image",bmp:"image",svg:"image",
+  mp4:"video",mov:"video",mkv:"video",avi:"video",webm:"video",
+  mp3:"audio",wav:"audio",flac:"audio",aac:"audio",
+  zip:"archive",tar:"archive",gz:"archive","7z":"archive",rar:"archive",
+  js:"code",py:"code",ts:"code",c:"code",cpp:"code",rs:"code",go:"code",java:"code",html:"code",css:"code",json:"code",
+};
+function iconFor(name) {
+  const ext = name.split(".").pop().toLowerCase();
+  return SVG[EXT_ICON[ext]] || SVG.generic;
+}
+
+/* ---------------- file preview (Quick-Look style) ---------------- */
+const IMAGE_EXT = new Set(["jpg","jpeg","png","gif","webp","bmp","svg","ico"]);
+const VIDEO_EXT = new Set(["mp4","mov","mkv","webm","avi","m4v"]);
+const AUDIO_EXT = new Set(["mp3","wav","flac","aac","ogg","m4a"]);
+const TEXT_EXT = new Set(["txt","md","json","js","ts","py","c","cpp","h","rs","go","java","html","css","xml","csv","log","yaml","yml","toml","ini","sh"]);
+const PDF_EXT = new Set(["pdf"]);
+const TEXT_PREVIEW_LIMIT = 200_000; // bytes — larger text files fall back to "open in new tab"
+
+function extOf(name) { return name.split(".").pop().toLowerCase(); }
+
+async function openPreview(name, url, size) {
+  const ext = extOf(name);
+  const modal = $("previewModal");
+  $("previewTitle").textContent = name;
+  $("previewMeta").textContent = fmtBytes(size);
+  $("previewDownload").href = url;
+  const body = $("previewBody");
+  body.innerHTML = '<div class="preview-loading">loading…</div>';
+  modal.classList.add("open");
+
+  if (IMAGE_EXT.has(ext)) {
+    body.innerHTML = `<img src="${url}" alt="${name}">`;
+  } else if (VIDEO_EXT.has(ext)) {
+    body.innerHTML = `<video src="${url}" controls autoplay></video>`;
+  } else if (AUDIO_EXT.has(ext)) {
+    body.innerHTML = `<div class="preview-audio-wrap">${SVG.audio}<audio src="${url}" controls autoplay></audio></div>`;
+  } else if (PDF_EXT.has(ext)) {
+    body.innerHTML = `<iframe class="preview-frame" src="${url}"></iframe>`;
+  } else if (TEXT_EXT.has(ext) && size <= TEXT_PREVIEW_LIMIT) {
+    try {
+      const res = await fetch(url);
+      const text = await res.text();
+      const pre = document.createElement("pre");
+      pre.className = "preview-text";
+      pre.textContent = text;
+      body.innerHTML = "";
+      body.appendChild(pre);
+    } catch {
+      body.innerHTML = `<div class="preview-none">Could not load preview.</div>`;
+    }
+  } else {
+    body.innerHTML = `<div class="preview-none">${SVG.generic}<div>No inline preview for <code>.${ext || "?"}</code> — download it instead.</div></div>`;
+  }
+}
+function closePreview() { $("previewModal").classList.remove("open"); $("previewBody").innerHTML = ""; }
+
+/* ---------------- recursive folder read (drag & drop) ---------------- */
+function traverseEntry(entry, path) {
+  return new Promise(resolve => {
+    if (entry.isFile) {
+      entry.file(file => { file._relPath = path + file.name; resolve([file]); }, () => resolve([]));
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      let all = [];
+      const readBatch = () => {
+        reader.readEntries(async entries => {
+          if (!entries.length) {
+            const nested = await Promise.all(all.map(e => traverseEntry(e, path + entry.name + "/")));
+            resolve(nested.flat());
+          } else {
+            all = all.concat(entries);
+            readBatch();
+          }
+        }, () => resolve([]));
+      };
+      readBatch();
+    } else {
+      resolve([]);
+    }
+  });
+}
+async function filesFromDataTransfer(dt) {
+  if (dt.items && dt.items.length && dt.items[0].webkitGetAsEntry) {
+    const entries = Array.from(dt.items).map(i => i.webkitGetAsEntry()).filter(Boolean);
+    const nested = await Promise.all(entries.map(e => traverseEntry(e, "")));
+    return nested.flat();
+  }
+  return Array.from(dt.files);
+}
+
+/* ---------------- encode file explorer state ---------------- */
+let selected = []; // { file, relPath, id }
+
+function relPathOf(file) {
+  return file._relPath || file.webkitRelativePath || file.name;
+}
+function addFiles(fileList) {
+  for (const f of fileList) {
+    selected.push({ file: f, relPath: relPathOf(f), id: Math.random().toString(36).slice(2) });
+  }
+  renderFileList();
+}
+function removeFile(id) {
+  selected = selected.filter(s => s.id !== id);
+  renderFileList();
+}
+function renderFileList() {
+  const listEl = $("fileList"), footerEl = $("fileListFooter");
+  if (!selected.length) {
+    listEl.innerHTML = "";
+    footerEl.style.display = "none";
+    $("fileMeta").textContent = "0 items";
+    return;
+  }
+  listEl.innerHTML = selected.map(s => {
+    const parts = s.relPath.split("/");
+    const name = parts.pop();
+    const dir = parts.length ? `<span class="fpath">${parts.join("/")}/</span>` : "";
+    return `<div class="file-row clickable" data-id="${s.id}">
+      <span class="ficon">${iconFor(name)}</span>
+      <span class="fname">${dir}${name}</span>
+      <span class="fleader"></span>
+      <span class="fsize">${fmtBytes(s.file.size)}</span>
+      <button class="fremove" data-id="${s.id}">×</button>
+    </div>`;
+  }).join("");
+  listEl.querySelectorAll(".fremove").forEach(btn => btn.addEventListener("click", (e) => { e.stopPropagation(); removeFile(btn.dataset.id); }));
+  listEl.querySelectorAll(".file-row.clickable").forEach(row => {
+    row.addEventListener("click", (e) => {
+      if (e.target.closest(".fremove")) return;
+      const s = selected.find(x => x.id === row.dataset.id);
+      if (!s) return;
+      openPreview(s.relPath.split("/").pop(), URL.createObjectURL(s.file), s.file.size);
+    });
+  });
+  const total = selected.reduce((a, s) => a + s.file.size, 0);
+  footerEl.style.display = "flex";
+  $("fileCount").textContent = `${selected.length} item${selected.length === 1 ? "" : "s"}`;
+  $("fileTotalSize").textContent = fmtBytes(total);
+  $("fileMeta").textContent = `${selected.length} item${selected.length === 1 ? "" : "s"} · ${fmtBytes(total)}`;
+}
+
+$("btnAddFiles").addEventListener("click", () => $("fileInput").click());
+$("btnAddFolder").addEventListener("click", () => $("folderInput").click());
+$("btnClear").addEventListener("click", () => { selected = []; renderFileList(); });
+$("fileInput").addEventListener("change", e => { addFiles(Array.from(e.target.files)); e.target.value = ""; });
+$("folderInput").addEventListener("change", e => { addFiles(Array.from(e.target.files)); e.target.value = ""; });
+
+const dz = $("dropzone");
+dz.addEventListener("click", () => $("fileInput").click());
+["dragenter","dragover"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("drag"); }));
+["dragleave","drop"].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("drag"); }));
+dz.addEventListener("drop", async e => { addFiles(await filesFromDataTransfer(e.dataTransfer)); });
+
+/* ---------------- decode dropzone (single file) ---------------- */
+let decFile = null;
+function renderDecFile() {
+  const listEl = $("decFileList");
+  if (!decFile) { listEl.innerHTML = ""; return; }
+  listEl.innerHTML = `<div class="file-row">
+    <span class="ficon">${iconFor(decFile.name)}</span>
+    <span class="fname">${decFile.name}</span>
+    <span class="fleader"></span>
+    <span class="fsize">${fmtBytes(decFile.size)}</span>
+    <button class="fremove" id="decFileRemove">×</button>
+  </div>`;
+  $("decFileRemove").addEventListener("click", () => { decFile = null; renderDecFile(); });
+}
+$("decFileInput").addEventListener("change", e => { decFile = e.target.files[0] || null; renderDecFile(); e.target.value=""; });
+const decDz = $("decDropzone");
+decDz.addEventListener("click", () => $("decFileInput").click());
+["dragenter","dragover"].forEach(evt => decDz.addEventListener(evt, e => { e.preventDefault(); decDz.classList.add("drag"); }));
+["dragleave","drop"].forEach(evt => decDz.addEventListener(evt, e => { e.preventDefault(); decDz.classList.remove("drag"); }));
+decDz.addEventListener("drop", async e => {
+  const files = await filesFromDataTransfer(e.dataTransfer);
+  if (files.length) { decFile = files[0]; renderDecFile(); }
+});
+
+/* ---------------- config ---------------- */
+let config = null;
+async function loadConfig() {
+  const res = await fetch("/api/config");
+  config = await res.json();
+  const resSel = $("encResolution");
+  config.resolutions.forEach(r => {
+    const opt = document.createElement("option");
+    opt.value = r; opt.textContent = r;
+    if (r === "1080p") opt.selected = true;
+    resSel.appendChild(opt);
+  });
+  const profSel = $("encProfile");
+  Object.entries(config.profiles).forEach(([name, info]) => {
+    const opt = document.createElement("option");
+    opt.value = name; opt.textContent = `${name} (${(info.fec_redundancy*100).toFixed(0)}% FEC)`;
+    if (name === config.default_profile) opt.selected = true;
+    profSel.appendChild(opt);
+  });
+  updateProfileHint();
+  profSel.addEventListener("change", updateProfileHint);
+}
+function updateProfileHint() {
+  const name = $("encProfile").value;
+  $("profileHint").textContent = config.profiles[name] ? config.profiles[name].description : "";
+}
+loadConfig();
+
+/* ---------------- pipeline stepper ---------------- */
+const ENCODE_STAGES = [
+  ["archive","Archive"], ["compress","Compress"], ["encrypt","Encrypt"],
+  ["fec","Error correction"], ["interleave","Interleave"], ["layout","Frame layout"],
+  ["modulate","Modulate"], ["video-encode","Video encode"],
+];
+const DECODE_STAGES = [
+  ["download (yt-dlp)","Download (yt-dlp)"], ["probe","Probe"], ["sync-scan","Sync scan"],
+  ["full-decode","Decode frames"], ["header-recovery","Header recovery"],
+  ["demodulate-payload","Demodulate"], ["fec-decode","Error correction"],
+  ["decrypt","Decrypt"], ["decompress","Decompress"], ["verify","Verify"],
+  ["extract","Extract"],
+];
+
+function buildStepper(el, stages) {
+  el.innerHTML = stages.map(([key, label], i) =>
+    `<div class="step" data-key="${key}">
+      <span class="step-idx">${String(i+1).padStart(2,"0")}</span>
+      <span class="step-label">${label}</span>
+      <span class="step-leader"></span>
+      <span class="step-status">·</span>
+    </div>`
+  ).join("");
+}
+function updateStepper(el, stages, currentStage) {
+  const idx = stages.findIndex(([key]) => key === currentStage);
+  el.querySelectorAll(".step").forEach((stepEl, i) => {
+    stepEl.classList.remove("done", "active");
+    const statusEl = stepEl.querySelector(".step-status");
+    if (idx < 0) return;
+    if (i < idx) { stepEl.classList.add("done"); statusEl.textContent = "✓"; }
+    else if (i === idx) { stepEl.classList.add("active"); statusEl.textContent = "●"; }
+  });
+}
+function finishStepper(el) {
+  el.querySelectorAll(".step").forEach(s => {
+    s.classList.remove("active"); s.classList.add("done"); s.querySelector(".step-status").textContent = "✓";
+  });
+}
+buildStepper($("encStepper"), ENCODE_STAGES);
+buildStepper($("decStepper"), DECODE_STAGES);
+
+/* ---------------- encode submit ---------------- */
+$("encSubmit").addEventListener("click", async () => {
+  const statusEl = $("encStatus"), resultEl = $("encResult"), progressCard = $("encProgressCard");
+  resultEl.innerHTML = "";
+  if (!selected.length) { alert("Add at least one file first."); return; }
+
+  $("encSubmit").disabled = true;
+  progressCard.style.display = "block";
+  buildStepper($("encStepper"), ENCODE_STAGES);
+  statusEl.className = "status"; statusEl.textContent = "> uploading...";
+
+  try {
+    const fd = new FormData();
+    for (const s of selected) fd.append("files", s.file, s.relPath);
+    const prep = await fetch("/api/encode/prepare", { method: "POST", body: fd });
+    if (!prep.ok) throw new Error((await prep.json()).detail || "upload failed");
+    const { session_id } = await prep.json();
+
+    const ws = new WebSocket(`${wsProto}://${location.host}/ws/encode/${session_id}`);
+    const report = await new Promise((resolve, reject) => {
+      ws.onopen = () => ws.send(JSON.stringify({
+        resolution: $("encResolution").value,
+        profile_name: $("encProfile").value,
+        compression: $("encCompression").value,
+        codec: $("encCodec").value,
+        crf: $("encCrf").value,
+        x264_preset: $("encPreset").value,
+        modulation_override: $("encModulation").value || null,
+        password: $("encEncrypt").checked ? $("encPassword").value : null,
+      }));
+      ws.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === "progress") {
+          updateStepper($("encStepper"), ENCODE_STAGES, msg.stage);
+          statusEl.textContent = "> " + msg.stage;
+        } else if (msg.type === "done") {
+          resolve(msg.report);
+        } else if (msg.type === "error") {
+          reject(new Error(msg.message));
+        }
+      };
+      ws.onerror = () => reject(new Error("connection error"));
+    });
+
+    finishStepper($("encStepper"));
+    statusEl.className = "status ok"; statusEl.textContent = "> done";
+
+    const videoRes = await fetch(`/api/encode/${session_id}/download`);
+    const blob = await videoRes.blob();
+    const url = URL.createObjectURL(blob);
+    const mins = Math.floor(report.duration_seconds/60), secs = Math.round(report.duration_seconds%60);
+    resultEl.innerHTML = `<div class="card readout">
+      <div class="card-head"><h2>Result</h2></div>
+      <div class="monitor"><video class="preview" src="${url}" controls></video></div>
+      <table>
+        <tr><td>Resolution</td><td>${report.resolution[0]}×${report.resolution[1]} @ ${report.fps}fps</td></tr>
+        <tr><td>Profile / modulation</td><td>${report.profile} / ${report.modulation}</td></tr>
+        <tr><td>Frames</td><td>${report.total_frames} (${report.header_frames} hdr + ${report.payload_frames} data)</td></tr>
+        <tr><td>Video duration</td><td>${mins}:${String(secs).padStart(2,'0')}</td></tr>
+        <tr><td>Original size</td><td>${fmtBytes(report.original_size)}</td></tr>
+        <tr><td>After compression</td><td>${fmtBytes(report.compressed_size)}</td></tr>
+        <tr><td>After FEC</td><td>${fmtBytes(report.fec_size)}</td></tr>
+        <tr><td>Encode time</td><td>${report.encode_wall_seconds.toFixed(1)}s</td></tr>
+      </table>
+      <a class="download-link" href="${url}" download="payload.mp4">↓ payload.mp4</a>
+    </div>`;
+  } catch (e) {
+    statusEl.className = "status bad"; statusEl.textContent = "> error: " + e.message;
+  } finally {
+    $("encSubmit").disabled = false;
+  }
+});
+
+/* ---------------- decode submit ---------------- */
+$("decSubmit").addEventListener("click", async () => {
+  const statusEl = $("decStatus"), resultEl = $("decResult"), progressCard = $("decProgressCard");
+  resultEl.innerHTML = "";
+  const useUrl = document.querySelector('#decSourceToggle .active').dataset.src === "url";
+  const youtubeUrl = $("decYoutubeUrl").value.trim();
+  if (useUrl && !youtubeUrl) { alert("Paste a YouTube URL first."); return; }
+  if (!useUrl && !decFile) { alert("Select a video file first."); return; }
+
+  $("decSubmit").disabled = true;
+  progressCard.style.display = "block";
+  buildStepper($("decStepper"), DECODE_STAGES);
+  statusEl.className = "status"; statusEl.textContent = "> preparing...";
+
+  try {
+    const fd = new FormData();
+    if (!useUrl) fd.append("video", decFile);
+    else fd.append("youtube_url", youtubeUrl);
+    const prep = await fetch("/api/decode/prepare", { method: "POST", body: fd });
+    if (!prep.ok) throw new Error((await prep.json()).detail || "prepare failed");
+    const { session_id } = await prep.json();
+
+    const ws = new WebSocket(`${wsProto}://${location.host}/ws/decode/${session_id}`);
+    const report = await new Promise((resolve, reject) => {
+      ws.onopen = () => ws.send(JSON.stringify({
+        password: $("decEncrypted").checked ? $("decPassword").value : null,
+        youtube_url: useUrl ? youtubeUrl : null,
+      }));
+      ws.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === "progress") {
+          updateStepper($("decStepper"), DECODE_STAGES, msg.stage);
+          statusEl.textContent = "> " + msg.stage;
+        } else if (msg.type === "done") {
+          resolve(msg.report);
+        } else if (msg.type === "error") {
+          reject(new Error(msg.message));
+        }
+      };
+      ws.onerror = () => reject(new Error("connection error"));
+    });
+
+    finishStepper($("decStepper"));
+    statusEl.className = report.fully_recovered ? "status ok" : "status bad";
+    statusEl.textContent = report.fully_recovered ? "> fully recovered" : "> partial recovery — see details below";
+
+    let rows = "";
+    report.recovered.forEach(f => {
+      const fileUrl = `/api/decode/${report.session_id}/file/${f.path.split("/").map(encodeURIComponent).join("/")}`;
+      rows += `<div class="file-row clickable" data-name="${f.path}" data-url="${fileUrl}" data-size="${f.size}">
+        <span class="ficon">${iconFor(f.path)}</span>
+        <span class="fname">${f.path}</span>
+        <span class="fleader"></span>
+        <span class="fsize">${fmtBytes(f.size)}</span>
+        <span class="pill ok">ok</span>
+        <a class="frow-download" href="${fileUrl}" download title="Download">${SVG.download}</a>
+      </div>`;
+    });
+    report.failed.forEach(f => {
+      rows += `<div class="file-row"><span class="ficon">${SVG.warn}</span><span class="fname">${f.path || "(archive)"}</span><span class="fleader"></span><span class="pill bad">${f.reason}</span></div>`;
+    });
+
+    resultEl.innerHTML = `<div class="card readout">
+      <div class="card-head"><h2>Result</h2></div>
+      <table>
+        <tr><td>Resolution</td><td>${report.resolution[0]}×${report.resolution[1]} @ ${report.fps}fps</td></tr>
+        <tr><td>Payload frames</td><td>${report.payload_frames_present}/${report.payload_frames_expected} present</td></tr>
+        <tr><td>FEC recovery</td><td>${report.fec_stats.blocks_ok}/${report.fec_stats.blocks_total} blocks (${report.fec_stats.blocks_uncorrectable} uncorrectable)</td></tr>
+        <tr><td>Archive checksum</td><td>${report.archive_checksum_ok ? '<span class="pill ok">ok</span>' : '<span class="pill bad">mismatch</span>'}</td></tr>
+      </table>
+      <div class="file-list" style="margin-top:.9rem">${rows}</div>
+      <div class="hint" style="margin-top:.6rem">Click a file to preview it. ${report.recovered.length > 1 ? `Or grab everything at once:` : ""}</div>
+      ${report.recovered.length > 1 ? `<a class="download-link" href="/api/decode/${report.session_id}/download">↓ all as restored.zip</a>` : ""}
+    </div>`;
+
+    resultEl.querySelectorAll(".file-row.clickable").forEach(row => {
+      row.addEventListener("click", (e) => {
+        if (e.target.closest(".frow-download")) return; // let the download link behave normally
+        openPreview(row.dataset.name, row.dataset.url, Number(row.dataset.size));
+      });
+    });
+  } catch (e) {
+    statusEl.className = "status bad"; statusEl.textContent = "> error: " + e.message;
+  } finally {
+    $("decSubmit").disabled = false;
+  }
+});
+</script>
+</body>
+</html>

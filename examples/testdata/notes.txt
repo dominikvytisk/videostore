@@ -1,0 +1,3 @@
+VideoStore example dataset.
+This is a small, human-readable text file included to demonstrate the
+encode/decode round trip end to end.
