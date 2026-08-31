@@ -33,17 +33,39 @@ def tag_block_indices(width: int, height: int, block_size: int, tag_size: int = 
     return idx[:tag_rows, :tag_cols].reshape(-1)
 
 
-def payload_capacity_bits(width: int, height: int, block_size: int, capacity_blocks: int) -> int:
-    excluded = len(tag_block_indices(width, height, block_size))
-    return capacity_blocks - excluded
+def _excluded_group_indices(width: int, height: int, block_size: int, capacity_blocks: int, spread_factor: int = 1) -> set:
+    """Which logical bit positions (== capacity_blocks() of a scheme) must be
+    skipped because the tag region will overwrite part of the signal there.
+    For spread_factor==1 a logical bit IS a raw block, so this is just the
+    raw tag-block indices. For spread_factor>1, `capacity_blocks` groups
+    `spread_factor` CONSECUTIVE raw blocks per logical bit (see
+    modulation/masked_luminance.py) -- a group is excluded if ANY of its raw
+    blocks falls in the tag region, since the tag would otherwise clobber
+    part of that group's aggregate signal."""
+    raw_excluded = tag_block_indices(width, height, block_size).tolist()
+    if spread_factor <= 1:
+        return set(raw_excluded)
+    excluded = set()
+    for i in raw_excluded:
+        g = i // spread_factor
+        if g < capacity_blocks:
+            excluded.add(g)
+    return excluded
 
 
-def scatter_logical_bits(logical_bits: np.ndarray, width: int, height: int, block_size: int, capacity_blocks: int) -> np.ndarray:
+def payload_capacity_bits(width: int, height: int, block_size: int, capacity_blocks: int, spread_factor: int = 1) -> int:
+    excluded = _excluded_group_indices(width, height, block_size, capacity_blocks, spread_factor)
+    return capacity_blocks - len(excluded)
+
+
+def scatter_logical_bits(
+    logical_bits: np.ndarray, width: int, height: int, block_size: int, capacity_blocks: int, spread_factor: int = 1
+) -> np.ndarray:
     """Place `logical_bits` (length == payload_capacity_bits(...)) into a full
     capacity_blocks-length array in row-major block order, skipping tag-region
     block indices (left as 0 — those pixels get overwritten by the tag encoder
     afterward anyway)."""
-    excluded = set(tag_block_indices(width, height, block_size).tolist())
+    excluded = _excluded_group_indices(width, height, block_size, capacity_blocks, spread_factor)
     full = np.zeros(capacity_blocks, dtype=np.uint8)
     li = 0
     for i in range(capacity_blocks):
@@ -56,8 +78,10 @@ def scatter_logical_bits(logical_bits: np.ndarray, width: int, height: int, bloc
     return full
 
 
-def gather_logical_bits(full_bits: np.ndarray, full_confidence: np.ndarray, width: int, height: int, block_size: int) -> tuple[np.ndarray, np.ndarray]:
-    excluded = set(tag_block_indices(width, height, block_size).tolist())
+def gather_logical_bits(
+    full_bits: np.ndarray, full_confidence: np.ndarray, width: int, height: int, block_size: int, spread_factor: int = 1
+) -> tuple[np.ndarray, np.ndarray]:
+    excluded = _excluded_group_indices(width, height, block_size, len(full_bits), spread_factor)
     mask = np.ones(len(full_bits), dtype=bool)
     if excluded:
         mask[list(excluded)] = False

@@ -15,10 +15,10 @@ import numpy as np
 
 from videostore.channel import CHANNEL_PROFILES, apply_channel
 from videostore.decoder.pipeline import decode
-from videostore.encoder.pipeline import encode
+from videostore.encoder.pipeline import _resolve_resolution, encode
 from videostore.metrics import psnr, ssim
 from videostore.presets import PROFILES, RESOLUTIONS
-from videostore.video.io import decode_video_luma
+from videostore.video.io import decode_video_luma, extract_cover_yuv420, read_cover_frames_looped
 
 
 def _sha256_file(path: str) -> str:
@@ -56,10 +56,52 @@ class BenchmarkResult:
     block_error_rate: float = 0.0
     psnr_db: Optional[float] = None
     ssim_index: Optional[float] = None
+    cover_video: str = ""
+    cover_looped: bool = False
+    # "Invisibility" metrics: encoded (pre-channel) output vs. the cover
+    # video itself -- distinct from psnr_db/ssim_index above, which measure
+    # transcode damage (encoded vs. post-channel), not embedding visibility.
+    # None whenever cover_video is empty (synthetic-carrier runs).
+    cover_psnr_db: Optional[float] = None
+    cover_ssim_index: Optional[float] = None
     error: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def _cover_invisibility_metrics(
+    cover_video: str, encoded_path: str, width: int, height: int, fps: int, workdir: str
+) -> tuple[Optional[float], Optional[float]]:
+    """PSNR/SSIM between the encoded (pre-channel) output and the cover
+    video itself, sampled at a handful of frames spread across the video
+    (start/middle/end, so both header-frame and payload-frame visibility are
+    represented -- they use different constants, see
+    docs/architecture.md's cover-video section). Answers "does the output
+    look different from the source", as opposed to psnr_db/ssim_index above
+    (encoded vs. post-channel, which measures transcode damage instead)."""
+    try:
+        encoded_frames = list(decode_video_luma(encoded_path, expected_width=width, expected_height=height))
+        if not encoded_frames:
+            return None, None
+        raw_path = os.path.join(workdir, "cover_ref_raw.yuv")
+        # Cap decoding at the encoded output's own frame count -- otherwise a
+        # long cover video gets decoded to raw yuv420p in full (tens of GB
+        # for a multi-minute 1080p clip) even though only a few sampled
+        # frames of it are ever read.
+        n = extract_cover_yuv420(cover_video, width, height, fps, raw_path, max_frames=len(encoded_frames))
+        if n <= 0:
+            return None, None
+        sample_idxs = sorted({0, len(encoded_frames) // 2, len(encoded_frames) - 1})
+        cover_frames = list(read_cover_frames_looped(raw_path, width, height, n, len(encoded_frames)))
+        psnrs, ssims = [], []
+        for i in sample_idxs:
+            cover_y, _, _ = cover_frames[i]
+            psnrs.append(psnr(encoded_frames[i], cover_y))
+            ssims.append(ssim(encoded_frames[i].astype(np.float64), cover_y.astype(np.float64)))
+        return float(np.mean(psnrs)), float(np.mean(ssims))
+    except Exception:
+        return None, None
 
 
 def run_one(
@@ -73,6 +115,8 @@ def run_one(
     modulation_override: Optional[str] = None,
     compute_quality: bool = True,
     workdir: Optional[str] = None,
+    cover_video: Optional[str] = None,
+    spread_factor: int = 1,
 ) -> BenchmarkResult:
     own_workdir = workdir is None
     workdir = workdir or tempfile.mkdtemp(prefix="videostore_bench_")
@@ -89,6 +133,7 @@ def run_one(
         channel=channel_name,
         resolution=resolution,
         fps=fps,
+        cover_video=os.path.basename(cover_video) if cover_video else "",
     )
     try:
         encoded_path = os.path.join(workdir, "encoded.mp4")
@@ -98,6 +143,7 @@ def run_one(
             encoded_path,
             resolution=resolution,
             fps=fps,
+            spread_factor=spread_factor,
             profile_name=profile_name,
             compression="auto",
             password=password,
@@ -107,14 +153,22 @@ def run_one(
             modulation_override=modulation_override,
             workdir=os.path.join(workdir, "enc_wd"),
             keep_temp=False,
+            cover_video=cover_video,
         )
         result.encode_time_seconds = time.time() - t0
         result.modulation = enc_report.modulation
         result.video_duration_seconds = enc_report.duration_seconds
         result.video_file_size = os.path.getsize(encoded_path)
+        result.cover_looped = enc_report.cover_looped
         if enc_report.duration_seconds > 0:
             result.physical_bitrate_mbps = (result.video_file_size * 8 / 1e6) / enc_report.duration_seconds
             result.effective_payload_bitrate_mbps = (enc_report.original_size * 8 / 1e6) / enc_report.duration_seconds
+
+        if cover_video and compute_quality:
+            width, height = _resolve_resolution(resolution)
+            result.cover_psnr_db, result.cover_ssim_index = _cover_invisibility_metrics(
+                cover_video, encoded_path, width, height, fps, workdir
+            )
 
         channel_path = os.path.join(workdir, "channel.mp4")
         t0 = time.time()
@@ -173,6 +227,7 @@ def run_matrix(
     modulations: Optional[list[Optional[str]]] = None,
     compute_quality: bool = True,
     progress=None,
+    cover_video: Optional[str] = None,
 ) -> list[BenchmarkResult]:
     modulations = modulations or [None]
     results = []
@@ -191,6 +246,7 @@ def run_matrix(
                         password=password,
                         modulation_override=mod,
                         compute_quality=compute_quality,
+                        cover_video=cover_video,
                     )
                     results.append(r)
                     done += 1

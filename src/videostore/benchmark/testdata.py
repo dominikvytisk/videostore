@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import os
 import struct
+import subprocess
 import zlib
 
 import numpy as np
+
+from videostore.video.io import FFMPEG
 
 
 def generate_test_files(out_dir: str, size_bytes: int = 200_000) -> dict[str, str]:
@@ -65,3 +68,46 @@ def generate_mixed_dataset(out_dir: str, size_bytes: int = 200_000) -> str:
     mixed_dir = os.path.join(out_dir, "mixed")
     generate_test_files(mixed_dir, size_bytes // 5)
     return mixed_dir
+
+
+# Synthetic (ffmpeg lavfi) cover-video corpus for cover-video/stego-mode
+# benchmarking, spanning a spread of local-texture profiles: a genuinely flat
+# clip (the worst case for the masked scheme -- everything sits at
+# margin_floor), a highly detailed one (best case, near-parity capacity), and
+# one with real motion (deblocking/motion-compensation stresses local-texture
+# statistics the most, the closest proxy this corpus has to the "mask desync"
+# risk in docs/architecture.md). This is a proxy for real footage, not a
+# substitute for it -- lavfi patterns don't have real camera noise or a real
+# compression history. See docs/benchmarking.md's cover-video section.
+COVER_VIDEO_SOURCES: dict[str, str] = {
+    "flat": "color=c=gray:s={size}:r={fps}:d={duration}",
+    "detailed": "mandelbrot=size={size}:rate={fps}",
+    "motion": "testsrc2=size={size}:rate={fps}:duration={duration}",
+}
+
+
+def generate_test_videos(
+    out_dir: str,
+    width: int = 640,
+    height: int = 360,
+    fps: int = 30,
+    duration: int = 6,
+) -> dict[str, str]:
+    """Short synthetic cover clips for benchmarking cover-video mode -- see
+    COVER_VIDEO_SOURCES for what each one is meant to stress."""
+    os.makedirs(out_dir, exist_ok=True)
+    size = f"{width}x{height}"
+    paths: dict[str, str] = {}
+    for name, lavfi in COVER_VIDEO_SOURCES.items():
+        p = os.path.join(out_dir, f"cover_{name}.mp4")
+        source = lavfi.format(size=size, fps=fps, duration=duration)
+        cmd = [
+            FFMPEG, "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", source,
+        ]
+        if name == "detailed":  # mandelbrot has no built-in duration cutoff
+            cmd += ["-t", str(duration)]
+        cmd += ["-pix_fmt", "yuv420p", "-c:v", "libx264", "-crf", "18", p]
+        subprocess.run(cmd, check=True)
+        paths[name] = p
+    return paths

@@ -20,10 +20,14 @@ whole folders — dropped folders are read recursively via the
 "Add folder" button using `<input webkitdirectory>` for browsers/flows where
 drag-and-drop of a directory doesn't fire), with a live per-stage pipeline
 progress view and, on success, an inline `<video>` preview of the actual
-encoded payload plus a download link. Decode accepts a dropped video file or
-a pasted YouTube URL (downloaded locally via `yt-dlp`, never uploaded), shows
-the same kind of live stage progress, then a file-explorer-style list of
-recovered/failed entries and a `.zip` download.
+encoded payload plus a download link. A "Carrier" toggle switches between the
+default synthetic carrier and cover-video mode (drop your own `.mp4`; see
+[architecture.md](architecture.md)'s cover-video section — experimental,
+measurably less visible than the synthetic carrier but not truly invisible).
+Decode accepts a dropped video file or a pasted YouTube URL (downloaded
+locally via `yt-dlp`, never uploaded), shows the same kind of live stage
+progress, then a file-explorer-style list of recovered/failed entries and a
+`.zip` download.
 
 ## Endpoints
 
@@ -42,14 +46,17 @@ programmatic/`curl` use and covered by the earliest web tests:
 what the UI actually drives:
 - `POST /api/encode/prepare` — multipart form (`files[]`, each with its
   relative path as the multipart filename, e.g. `sub/nested.txt` for a
-  dropped folder). Saves them into a fresh session and returns
-  `{session_id, files: [...], total_size}`.
+  dropped folder, plus an optional `cover_video` file field). Saves them into
+  a fresh session and returns `{session_id, files: [...], total_size,
+  has_cover_video}`.
 - `WS /ws/encode/{session_id}` — client sends one JSON message with the
   encode params; server runs `encode()` in a thread-pool executor (so it
   doesn't block the event loop) and streams `{"type":"progress","stage":
-  "archive"|"compress"|"encrypt"|"fec"|"interleave"|"layout"|"modulate"|
-  "video-encode"}` events — the literal stage names `encoder/pipeline.py`
-  already reports — followed by `{"type":"done","report":{...}}` or
+  "archive"|"compress"|"encrypt"|"fec"|"interleave"|"layout"|"cover"|
+  "modulate"|"video-encode"}` events — the literal stage names
+  `encoder/pipeline.py` already reports (`"cover"` only appears when a cover
+  video was uploaded) — followed by `{"type":"done","report":{...}}` (report
+  includes `cover_video`/`cover_looped` booleans) or
   `{"type":"error","message":...}`.
 - `GET /api/encode/{session_id}/download` — the resulting `.mp4`.
 - `POST /api/decode/prepare` — multipart `video` **or** a `youtube_url` form

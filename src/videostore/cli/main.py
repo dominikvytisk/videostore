@@ -3,6 +3,7 @@ from __future__ import annotations
 import getpass
 import json
 import os
+import shutil
 import sys
 import time
 
@@ -70,8 +71,22 @@ def cli():
 @click.option("--codec", default="libx264", show_default=True)
 @click.option("--crf", default=18, show_default=True)
 @click.option("--preset", "x264_preset", default="medium", show_default=True)
-@click.option("--modulation", "modulation_override", default=None, type=click.Choice(["luminance-block", "dct-pair"]))
-def encode(inputs, output, resolution, fps, profile_name, compression, encrypt, password, codec, crf, x264_preset, modulation_override):
+@click.option("--modulation", "modulation_override", default=None, type=click.Choice(["luminance-block", "dct-pair", "masked-luminance"]))
+@click.option(
+    "--cover-video",
+    default=None,
+    type=click.Path(exists=True),
+    help="Embed into this existing video instead of a synthetic carrier (experimental, see docs/architecture.md).",
+)
+@click.option(
+    "--spread-factor",
+    default=None,
+    type=click.IntRange(min=1),
+    help="Cover-video mode only: spend N raw blocks per logical bit at 1/N the per-block push (spread-spectrum-style), "
+    "trading capacity (needs a longer/more cover frames) for a smaller, less-flickery per-block visible delta. "
+    "Defaults to the chosen profile's own value (see --profile) unless set explicitly.",
+)
+def encode(inputs, output, resolution, fps, profile_name, compression, encrypt, password, codec, crf, x264_preset, modulation_override, cover_video, spread_factor):
     """Encode INPUTS (files and/or directories) into a video at OUTPUT."""
     pw = password or _get_password(encrypt)
     t0 = time.time()
@@ -94,6 +109,8 @@ def encode(inputs, output, resolution, fps, profile_name, compression, encrypt, 
             preset=x264_preset,
             modulation_override=modulation_override,
             progress=cb,
+            cover_video=cover_video,
+            spread_factor=spread_factor,
         )
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(str(exc)) from exc
@@ -109,6 +126,8 @@ def encode(inputs, output, resolution, fps, profile_name, compression, encrypt, 
     ui.info(f"  After FEC:         {report.fec_size:,} bytes")
     ui.info(f"  Encode wall time:  {report.encode_wall_seconds:.1f}s")
     ui.info(f"  Output:            {output}")
+    if report.cover_video:
+        ui.info(f"  Cover video:       {report.cover_video}{' (looped to fill duration)' if report.cover_looped else ''}")
 
 
 # ---------------------------------------------------------------- decode ---
@@ -184,7 +203,14 @@ def decode(video, output, password, ask_password, debug, youtube_url):
 @click.option("--fps", default=30, show_default=True)
 @click.option("--profile", "profile_name", default=DEFAULT_PROFILE, show_default=True, type=click.Choice(list(PROFILES)))
 @click.option("--encrypt", is_flag=True)
-def inspect(path, resolution, fps, profile_name, encrypt):
+@click.option(
+    "--cover-video",
+    default=None,
+    type=click.Path(exists=True),
+    help="Estimate as if encoding into this cover video (masked-luminance modulation, and a loop warning if it's too short).",
+)
+@click.option("--spread-factor", default=None, type=click.IntRange(min=1), help="See `encode --help`.")
+def inspect(path, resolution, fps, profile_name, encrypt, cover_video, spread_factor):
     """Estimate encode outcome for PATH (files/dir), or show header info if
     PATH is a VideoStore-encoded video."""
     if os.path.isfile(path) and _looks_like_video(path):
@@ -202,7 +228,7 @@ def inspect(path, resolution, fps, profile_name, encrypt):
     rs_config = rs_config_for_redundancy(profile.fec_redundancy)
     fec_estimate = int((compressed_estimate / rs_config.message_len) + 1) * rs_config.nsize
     w, h = _resolve_resolution(resolution)
-    mod = build_payload_modulation(profile_name, None)
+    mod = build_payload_modulation(profile_name, None, cover_video=bool(cover_video), spread_factor=spread_factor)
     per_frame = payload_capacity_per_frame(w, h, mod)
     payload_frames = frames_needed_for_payload(fec_estimate * 8, w, h, mod)
     total_frames = payload_frames + 10
@@ -218,6 +244,25 @@ def inspect(path, resolution, fps, profile_name, encrypt):
     ui.info(f"  Estimated payload:     {mbit_s:.2f} Mbit/s (== original size / duration, NOT theoretical channel capacity)")
     ui.info(f"  Estimated frames:      {total_frames} ({payload_frames} payload + 10 header)")
     ui.info(f"  Estimated duration:    {int(duration_s)//60}:{int(duration_s)%60:02d}")
+    if cover_video:
+        cover_info = probe_video(cover_video)
+        from videostore.video.io import yuv420_frame_bytes
+
+        estimated_raw_gb = total_frames * yuv420_frame_bytes(w, h) / 1e9
+        free_gb = shutil.disk_usage(os.path.dirname(os.path.abspath(cover_video)) or ".").free / 1e9
+        ui.info(f"  Cover extraction needs: ~{estimated_raw_gb:.1f} GB of temporary raw video ({free_gb:.1f} GB free on this disk)")
+        if estimated_raw_gb > free_gb * 0.9:
+            ui.warn("That's more than the available disk space -- encode() will refuse to start rather than fill the disk. Try a lower --resolution or --spread-factor.")
+        if cover_info.nb_frames:
+            cover_duration_s = cover_info.nb_frames / cover_info.fps if cover_info.fps else 0
+            ui.info(f"  Cover video:           {cover_video} ({cover_info.nb_frames} frames @ {cover_info.fps:g}fps, {int(cover_duration_s)//60}:{int(cover_duration_s)%60:02d})")
+            if total_frames > cover_info.nb_frames:
+                loops = -(-total_frames // cover_info.nb_frames)  # ceil
+                ui.warn(f"Payload needs {total_frames} frames but the cover only has {cover_info.nb_frames} -- it will be looped ~{loops}x (visible jump-cut at each loop point).")
+            else:
+                ui.ok("Cover video is long enough -- no looping needed.")
+        else:
+            ui.warn("Could not determine the cover video's frame count (ffprobe didn't report nb_frames) -- skip the loop check and encode() will tell you at runtime instead.")
     ui.warn("All figures above are ESTIMATES based on presets.py profile parameters, not a real encode. Run `videostore benchmark` for measured numbers.")
 
 
@@ -276,7 +321,19 @@ def test_channel(video, output, channel_name):
 @click.option("--size", "size_bytes", default=200_000, show_default=True)
 @click.option("-o", "--output-dir", default="./benchmark-results", show_default=True)
 @click.option("--list-channels", is_flag=True)
-def benchmark(profile_names, channel_names, resolution, fps, size_bytes, output_dir, list_channels):
+@click.option(
+    "--cover-video",
+    default=None,
+    type=click.Path(exists=True),
+    help="Run the matrix in cover-video mode against this video instead of the synthetic carrier.",
+)
+@click.option(
+    "--cover-corpus",
+    is_flag=True,
+    help="Run once per synthetic cover-video corpus clip (flat/detailed/motion, see benchmark/testdata.py) "
+    "instead of a single --cover-video. Synthetic proxy only, not a substitute for real footage.",
+)
+def benchmark(profile_names, channel_names, resolution, fps, size_bytes, output_dir, list_channels, cover_video, cover_corpus):
     """Run the encode -> channel -> decode -> compare benchmark matrix."""
     from videostore.channel import CHANNEL_PROFILES
 
@@ -285,27 +342,48 @@ def benchmark(profile_names, channel_names, resolution, fps, size_bytes, output_
             ui.info(f"  {name}: {p.description}")
         return
 
-    from videostore.benchmark import generate_test_files, run_matrix, write_json, write_csv, write_html
+    from videostore.benchmark import generate_test_files, generate_test_videos, run_matrix, write_json, write_csv, write_html
+
+    if cover_video and cover_corpus:
+        raise click.ClickException("pass either --cover-video or --cover-corpus, not both")
 
     os.makedirs(output_dir, exist_ok=True)
     testdata_dir = os.path.join(output_dir, "testdata")
     ui.step(f"Generating test corpus in {testdata_dir}")
     files = generate_test_files(testdata_dir, size_bytes)
 
-    ui.step(f"Running matrix: {len(files)} files x {len(profile_names)} profile(s) x {len(channel_names)} channel(s)")
-
     def cb(done, total, r):
         status = "PASS" if r.success else "FAIL"
-        ui.info(f"  [{done}/{total}] {r.test_file} / {r.profile} / {r.channel}: {status}")
+        cover_note = f" cover={r.cover_video}" if r.cover_video else ""
+        ui.info(f"  [{done}/{total}] {r.test_file} / {r.profile} / {r.channel}{cover_note}: {status}")
 
-    results = run_matrix(
-        files,
-        profiles=list(profile_names),
-        channels=list(channel_names),
-        resolution=resolution,
-        fps=fps,
-        progress=cb,
-    )
+    if cover_corpus:
+        cover_dir = os.path.join(output_dir, "cover-testdata")
+        ui.step(f"Generating synthetic cover-video corpus in {cover_dir}")
+        covers = generate_test_videos(cover_dir)
+        results = []
+        for cover_name, cover_path in covers.items():
+            ui.step(f"Running matrix against cover '{cover_name}': {len(files)} files x {len(profile_names)} profile(s) x {len(channel_names)} channel(s)")
+            results += run_matrix(
+                files,
+                profiles=list(profile_names),
+                channels=list(channel_names),
+                resolution=resolution,
+                fps=fps,
+                progress=cb,
+                cover_video=cover_path,
+            )
+    else:
+        ui.step(f"Running matrix: {len(files)} files x {len(profile_names)} profile(s) x {len(channel_names)} channel(s)")
+        results = run_matrix(
+            files,
+            profiles=list(profile_names),
+            channels=list(channel_names),
+            resolution=resolution,
+            fps=fps,
+            progress=cb,
+            cover_video=cover_video,
+        )
 
     write_json(results, os.path.join(output_dir, "benchmark.json"))
     write_csv(results, os.path.join(output_dir, "benchmark.csv"))

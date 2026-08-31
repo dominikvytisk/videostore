@@ -22,8 +22,8 @@ class LuminanceBlockModulation(ModulationScheme):
     name = "luminance-block"
     scheme_id = 1
 
-    def __init__(self, block_size: int = 16, margin: float = 20.0):
-        super().__init__(block_size=block_size, margin=margin)
+    def __init__(self, block_size: int = 16, margin: float = 20.0, spread_factor: int = 1):
+        super().__init__(block_size=block_size, margin=margin, spread_factor=spread_factor)
         if block_size % 2 != 0:
             raise ValueError("block_size must be even (split into top/bottom halves)")
 

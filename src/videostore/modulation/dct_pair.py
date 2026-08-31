@@ -36,8 +36,9 @@ class DCTPairModulation(ModulationScheme):
         margin: float = 12.0,
         coeff_a: tuple[int, int] = (2, 3),
         coeff_b: tuple[int, int] = (3, 2),
+        spread_factor: int = 1,
     ):
-        super().__init__(block_size=block_size, margin=margin)
+        super().__init__(block_size=block_size, margin=margin, spread_factor=spread_factor)
         self.coeff_a = coeff_a
         self.coeff_b = coeff_b
         if block_size < 4:

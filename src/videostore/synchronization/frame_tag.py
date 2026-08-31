@@ -15,9 +15,19 @@ in exchange the decoder can correctly reassemble a video that has had frames
 dropped, duplicated, or reordered by an fps conversion — it doesn't need to
 find the *nearest* checkpoint and hope nothing shifted since.
 
-The tag's own modulation parameters (block_size=32, margin=64) are a fixed
+The tag's own modulation parameters (block_size=16, margin=56) are a fixed
 protocol constant, not something stored in the header — the decoder has to
 be able to read frame_index before it has even fully recovered the header.
+
+Cover-video mode needs the SAME tag region to be far less visually obvious
+than a full-margin block-averaged patch would be against real footage, but
+can't just lower the margin: the decoder still needs to find the tag before
+it knows which mode is in play. TAG_MODULATION_STEALTH is a second fixed
+protocol constant (perceptually masked, lower floor) for exactly this —
+`decoder/pipeline.py::_sniff_resolution` tries both TAG_MODULATION_SYNTHETIC
+and TAG_MODULATION_STEALTH against the same decoded frames (cheap, no extra
+ffmpeg passes) and keeps whichever one produces valid tags, the same way it
+already tries multiple resolution candidates.
 """
 from __future__ import annotations
 
@@ -26,13 +36,15 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from videostore.modulation import LuminanceBlockModulation
+from videostore.modulation import LuminanceBlockModulation, PerceptualMaskedModulation
 from videostore.utils.bitstream import bits_to_bytes, bytes_to_bits
 from videostore.utils.hashing import crc32
 
 from ..constants import TAG_REGION_SIZE
 
-TAG_MODULATION = LuminanceBlockModulation(block_size=16, margin=56.0)
+TAG_MODULATION_SYNTHETIC = LuminanceBlockModulation(block_size=16, margin=56.0)
+TAG_MODULATION_STEALTH = PerceptualMaskedModulation(block_size=16, margin=56.0, margin_floor=20.0)
+TAG_MODULATION = TAG_MODULATION_SYNTHETIC  # default/backward-compatible name
 # frame_index, session_tag, ENCODER'S logical frame_width/frame_height, crc16.
 # width/height are duplicated here (also in the GlobalHeader) so the decoder
 # can tell "did YouTube actually serve me the resolution I encoded at?" from
@@ -65,24 +77,31 @@ class FrameTag:
     confidence: float
 
 
-def embed_tag(plane: np.ndarray, frame_index: int, session_tag: int, frame_width: int, frame_height: int) -> np.ndarray:
+def embed_tag(
+    plane: np.ndarray,
+    frame_index: int,
+    session_tag: int,
+    frame_width: int,
+    frame_height: int,
+    modulation=TAG_MODULATION_SYNTHETIC,
+) -> np.ndarray:
     tag_bytes = _pack(frame_index, session_tag, frame_width, frame_height)
     bits = bytes_to_bits(tag_bytes)
     region = plane[:TAG_REGION_SIZE, :TAG_REGION_SIZE]
-    n = TAG_MODULATION.capacity_blocks(region.shape[1], region.shape[0])
+    n = modulation.capacity_blocks(region.shape[1], region.shape[0])
     if n < len(bits):
         raise ValueError(f"tag region too small: capacity {n} bits < {len(bits)} needed")
     padded_bits = np.zeros(n, dtype=np.uint8)
     padded_bits[: len(bits)] = bits
-    modified = TAG_MODULATION.embed(region, padded_bits)
+    modified = modulation.embed(region, padded_bits)
     out = plane.copy()
     out[:TAG_REGION_SIZE, :TAG_REGION_SIZE] = modified
     return out
 
 
-def extract_tag(plane: np.ndarray) -> FrameTag:
+def extract_tag(plane: np.ndarray, modulation=TAG_MODULATION_SYNTHETIC) -> FrameTag:
     region = plane[:TAG_REGION_SIZE, :TAG_REGION_SIZE]
-    bits, conf = TAG_MODULATION.extract(region)
+    bits, conf = modulation.extract(region)
     tag_bits = bits[:TAG_BITS]
     tag_bytes = bits_to_bytes(tag_bits)
     frame_index, session_tag, frame_width, frame_height, crc16 = struct.unpack(_TAG_FMT, tag_bytes)

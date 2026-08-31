@@ -105,7 +105,77 @@ blocks — Reed-Solomon miscorrecting, caught by the archive checksum) while
 for the full writeup and exact numbers. This is captured as a permanent
 regression test in `tests/test_integration.py::test_survives_simulated_channel`.
 
-## 4. What isn't measured yet
+## 4. Cover-video ("stego") mode
+
+```bash
+videostore benchmark --profile stego-safe --cover-corpus \
+    --channel youtube-medium --channel youtube-low --size 20000 -o ./bench-cover
+```
+
+`--cover-corpus` runs the matrix once per synthetic ffmpeg lavfi cover clip
+(`flat`/`detailed`/`motion`, see `benchmark/testdata.py::generate_test_videos`
+— a proxy for real footage, not a substitute for it) instead of a single
+`--cover-video`. Each result gets two extra columns beyond the normal ones:
+`cover_video` (which clip, and whether it had to loop to fit the payload) and
+`cover_psnr_db`/`cover_ssim_index` — PSNR/SSIM between the encoded
+(pre-channel) output and the cover video itself, sampled at the start/
+middle/end of the video. This is the "does it look different from the
+source" invisibility metric, distinct from the existing `psnr_db`/
+`ssim_index` columns (encoded vs. post-channel, which measure transcode
+damage, not embedding visibility).
+
+Measured (20KB test corpus, 480p, `stego-safe` profile):
+
+| cover texture | channel | block error rate | cover PSNR (dB) | cover SSIM |
+|---|---|---|---|---|
+| flat | youtube-medium | 0.00% | 29.5 | 0.670 |
+| flat | youtube-low | 0.00% | 29.5 | 0.668 |
+| detailed | youtube-medium | 0.00% | 27.2 | 0.681 |
+| motion | youtube-medium | 0.00% | 27.0 | 0.667 |
+
+**Reliability**: 0% block error rate held across every texture and both
+channel severities tested, including the `flat` cover (the worst case for
+masking — every block sits at `margin_floor` since there's no texture to
+exploit). This mirrors `stego-safe`'s reuse of `youtube-safe`'s FEC envelope
+at a fixed resolution (not the large-downscale-plus-harsh-CRF combined
+stress that broke `youtube-safe` in section 3 above — that combined-stress
+case hasn't been re-tested for cover-video mode yet).
+
+**Invisibility**: cover SSIM sits around 0.65-0.68 regardless of cover
+texture, essentially flat across flat/detailed/motion. This is a real,
+somewhat surprising measured result worth being honest about: because
+capacity requires every block of every frame to carry payload data (see
+[architecture.md](architecture.md)'s cover-video section), there's no sparse
+"safe" region for the masking to fully exploit the way classic sparse
+steganography would — the whole frame is instrumented continuously, so even
+the "detailed"/"motion" covers (which allow bigger legitimate pushes) don't
+come out meaningfully more invisible than the "flat" one in aggregate. Read
+this as "measurably, meaningfully less visible than the always-100%-payload
+synthetic carrier," not as "invisible."
+
+Not yet run: real (non-synthetic) footage, a real YouTube upload round trip,
+or the combined downscale+harsh-CRF stress test from section 3.
+
+**`--spread-factor N`** (`run_one`/`run_matrix`'s `spread_factor` param)
+trades capacity for a real, measured invisibility improvement — SSIM 0.654 →
+0.809 at `spread_factor=4` on `youtube-safe`/`youtube-medium`, with the same
+0% block error rate. `spread_factor=8` breaks reliability on `youtube-safe`
+specifically (margin/8 falls below the transcode's noise floor) but is fine
+on `maximum-reliability`. A follow-up sweep on `maximum-reliability` found
+SSIM **plateaus around 0.83** by `spread_factor=16` (further increases don't
+help) and reliability breaks between 16 and 32. `spread_factor=16` initially
+looked like the sweet spot, but a full `pytest` run under real system load
+caught it sitting right at that cliff (one failure in 4 total runs, where
+`spread_factor=8` never failed) — a single clean sweep isn't enough to trust
+a boundary that close to the edge. The new `stego-invisible` profile
+(`presets.py`) therefore bundles `spread_factor=8` as its built-in default
+(same ~0.83 SSIM, real margin below the observed failure point) rather than
+requiring a manual `--spread-factor` guess. Full tables and the reasoning in
+[architecture.md](architecture.md)'s "Spread-spectrum mode" section — this
+is exactly the kind of profile/parameter boundary that needs measuring per
+combination (and re-measuring under load), not assuming.
+
+## 5. What isn't measured yet
 
 - **Real YouTube upload/download.** See [youtube-channel.md](youtube-channel.md).
 - **VMAF/PSNR/SSIM across the full matrix** — the benchmark runner computes

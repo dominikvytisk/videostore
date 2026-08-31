@@ -105,6 +105,8 @@ def _encode_report_dict(report) -> dict:
         "profile": report.profile,
         "modulation": report.modulation,
         "encode_wall_seconds": report.encode_wall_seconds,
+        "cover_video": bool(report.cover_video),
+        "cover_looped": report.cover_looped,
     }
 
 
@@ -301,7 +303,7 @@ def download_decoded(session_id: str):
 
 
 @app.post("/api/encode/prepare")
-async def prepare_encode(files: list[UploadFile] = File(...)):
+async def prepare_encode(files: list[UploadFile] = File(...), cover_video: Optional[UploadFile] = File(None)):
     if not files:
         raise HTTPException(400, "no files uploaded")
     session_dir = _new_session_dir()
@@ -314,7 +316,18 @@ async def prepare_encode(files: list[UploadFile] = File(...)):
         with open(dest, "wb") as out:
             shutil.copyfileobj(f.file, out)
         manifest.append({"path": str(dest.relative_to(inputs_dir)), "size": dest.stat().st_size})
-    return {"session_id": session_dir.name, "files": manifest, "total_size": sum(m["size"] for m in manifest)}
+    has_cover = False
+    if cover_video is not None and cover_video.filename:
+        cover_dest = session_dir / "cover_video.mp4"
+        with open(cover_dest, "wb") as out:
+            shutil.copyfileobj(cover_video.file, out)
+        has_cover = True
+    return {
+        "session_id": session_dir.name,
+        "files": manifest,
+        "total_size": sum(m["size"] for m in manifest),
+        "has_cover_video": has_cover,
+    }
 
 
 @app.websocket("/ws/encode/{session_id}")
@@ -343,6 +356,7 @@ async def ws_encode(ws: WebSocket, session_id: str):
 
     input_paths = _top_level_inputs(inputs_dir)
     output_path = session_dir / "output.mp4"
+    cover_video_path = session_dir / "cover_video.mp4"
     loop = asyncio.get_running_loop()
     bridge = ProgressBridge(loop)
 
@@ -360,6 +374,8 @@ async def ws_encode(ws: WebSocket, session_id: str):
                 crf=int(params.get("crf", 18)),
                 preset=params.get("x264_preset", "medium"),
                 modulation_override=params.get("modulation_override") or None,
+                cover_video=str(cover_video_path) if cover_video_path.is_file() else None,
+                spread_factor=int(params["spread_factor"]) if params.get("spread_factor") else None,
                 progress=lambda stage: bridge.emit({"type": "progress", "stage": stage}),
             )
             bridge.emit({"type": "done", "report": _encode_report_dict(report)})

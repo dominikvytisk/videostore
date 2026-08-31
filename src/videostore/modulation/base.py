@@ -28,9 +28,17 @@ class ModulationScheme(ABC):
     name: str = "base"
     scheme_id: int = -1
 
-    def __init__(self, block_size: int, margin: float):
+    def __init__(self, block_size: int, margin: float, spread_factor: int = 1):
         self.block_size = block_size
         self.margin = margin
+        # Spread-spectrum-style redundancy: a scheme MAY spend `spread_factor`
+        # blocks per logical bit instead of 1, at reduced per-block amplitude
+        # (see modulation/masked_luminance.py). Stored generically here so
+        # `get_modulation` (self-describing from GlobalHeader.mod_spread_factor)
+        # doesn't need to special-case which schemes implement it — a scheme
+        # that ignores it (spread_factor stays 1 in practice for those) is
+        # unaffected.
+        self.spread_factor = spread_factor
 
     @abstractmethod
     def capacity_blocks(self, width: int, height: int) -> int:
@@ -55,7 +63,7 @@ def register(cls: type[ModulationScheme]) -> type[ModulationScheme]:
     return cls
 
 
-def get_modulation(scheme_id: int, block_size: int, margin: float) -> ModulationScheme:
+def get_modulation(scheme_id: int, block_size: int, margin: float, spread_factor: int = 1) -> ModulationScheme:
     if scheme_id not in MODULATIONS:
         raise ValueError(f"unknown modulation scheme_id={scheme_id}")
-    return MODULATIONS[scheme_id](block_size=block_size, margin=margin)
+    return MODULATIONS[scheme_id](block_size=block_size, margin=margin, spread_factor=spread_factor)

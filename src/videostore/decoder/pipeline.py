@@ -13,6 +13,20 @@ for why each step is possible without already knowing the next one):
   4. Everything else the header declares (FEC config, modulation, payload
      frame count) is now known, so payload frames can be demodulated and
      placed by their tag's frame_index — tolerating drops/dupes/reordering.
+
+Cover-video mode encodes the tag/header with a *different* embed-time
+constant (TAG_MODULATION_STEALTH / HEADER_MODULATION_STEALTH, see
+synchronization/frame_tag.py) so the push is smaller on real footage. The
+decoder does NOT need to know or guess which one was used: every one of
+these block-mean-difference schemes decides a bit purely from
+sign(top_mean - bottom_mean), which doesn't depend on the margin/masking
+config at all -- margin only sizes the push at embed time and normalizes
+*confidence* at extract time. So reading with the plain synthetic constant
+recovers the same bits regardless of which one embedded them; only the
+confidence estimate is (harmlessly) approximate for stealth-mode content,
+which is fine here since neither the tag nor the header feed FEC's erasure
+mechanism (unlike the payload, which the header's own modulation_type/
+mod_margin fields already describe correctly per-scheme_id).
 """
 from __future__ import annotations
 
@@ -35,11 +49,17 @@ from videostore.crypto import KdfParams, derive_key
 from videostore.crypto.aead import Algorithm as AeadAlgo
 from videostore.crypto.aead import DecryptResult, decrypt_file
 from videostore.fec import RSConfig, decode_file, deinterleave_file, fec_output_size, padded_block_count, DecodeStats
-from videostore.framing.layout import HEADER_MODULATION, HEADER_BITS, header_capacity_per_frame, payload_capacity_per_frame, recover_header_bits
+from videostore.framing.layout import (
+    HEADER_MODULATION_SYNTHETIC,
+    HEADER_BITS,
+    header_capacity_per_frame,
+    payload_capacity_per_frame,
+    recover_header_bits,
+)
 from videostore.framing.regions import gather_logical_bits
 from videostore.modulation import get_modulation  # noqa: F401 (import registers concrete schemes)
 from videostore.presets import RESOLUTIONS
-from videostore.synchronization.frame_tag import extract_tag
+from videostore.synchronization.frame_tag import extract_tag, TAG_MODULATION_SYNTHETIC
 from videostore.utils.bitstream import bits_to_bytes
 from videostore.video.io import decode_video_luma, probe_video
 
@@ -125,7 +145,7 @@ def decode(
 
         report("demodulate-payload")
         w, h = header.frame_width, header.frame_height
-        payload_mod = get_modulation(header.modulation_type, header.mod_block_size, header.mod_margin)
+        payload_mod = get_modulation(header.modulation_type, header.mod_block_size, header.mod_margin, spread_factor=header.mod_spread_factor)
         per_frame = payload_capacity_per_frame(w, h, payload_mod)
         payload_frames_expected = header.total_frames - header.header_repeat_count
         total_bits = payload_frames_expected * per_frame
@@ -140,7 +160,7 @@ def decode(
                 continue
             frames_present += 1
             bits, conf = payload_mod.extract(plane.astype(np.float64))
-            lb, lc = gather_logical_bits(bits, conf, w, h, payload_mod.block_size)
+            lb, lc = gather_logical_bits(bits, conf, w, h, payload_mod.block_size, spread_factor=payload_mod.spread_factor)
             payload_bits[j * per_frame : (j + 1) * per_frame] = lb
             payload_conf[j * per_frame : (j + 1) * per_frame] = lc
 
@@ -237,6 +257,10 @@ def _sniff_resolution(video_path: str, info) -> Optional[tuple[int, int, int]]:
     via the documented --resolution presets; a custom "WxH" resolution that
     also gets rescaled by the channel is a known gap (see
     docs/troubleshooting.md).
+
+    Always reads with TAG_MODULATION_SYNTHETIC regardless of whether the
+    video was actually encoded in cover-video ("stealth") mode — see this
+    module's docstring for why that's still correct.
     """
     candidates = [(info.width, info.height)] + [
         rh for rh in RESOLUTIONS.values() if rh != (info.width, info.height)
@@ -255,15 +279,17 @@ def _sniff_resolution(video_path: str, info) -> Optional[tuple[int, int, int]]:
 
 
 def _recover_header(frame_planes: dict[int, np.ndarray], width: int, height: int) -> Optional[GlobalHeader]:
-    hcap_full = HEADER_MODULATION.capacity_blocks(width, height)
+    """Always reads with HEADER_MODULATION_SYNTHETIC -- correct for
+    stealth-mode-encoded headers too, see this module's docstring."""
+    hcap_full = HEADER_MODULATION_SYNTHETIC.capacity_blocks(width, height)
     all_bits: list[np.ndarray] = []
     all_conf: list[np.ndarray] = []
     for k in range(MAX_HEADER_SCAN_FRAMES):
         plane = frame_planes.get(k)
         if plane is None:
             continue
-        bits, conf = HEADER_MODULATION.extract(plane.astype(np.float64))
-        lb, lc = gather_logical_bits(bits, conf, width, height, HEADER_MODULATION.block_size)
+        bits, conf = HEADER_MODULATION_SYNTHETIC.extract(plane.astype(np.float64))
+        lb, lc = gather_logical_bits(bits, conf, width, height, HEADER_MODULATION_SYNTHETIC.block_size)
         all_bits.append(lb)
         all_conf.append(lc)
         total = sum(len(b) for b in all_bits)

@@ -32,12 +32,20 @@ from videostore.modulation.base import ModulationScheme, register
 @register
 class MyScheme(ModulationScheme):
     name = "my-scheme"
-    scheme_id = 2  # must be unique across MODULATIONS
+    scheme_id = 3  # must be unique across MODULATIONS (0=dct-pair, 1=luminance-block, 2=masked-luminance)
 
     def capacity_blocks(self, width, height): ...
     def embed(self, plane, bits): ...          # plane: (H,W) float64 luma
     def extract(self, plane): ...              # -> (bits uint8, confidence float64 in [0,1])
 ```
+
+`modulation/masked_luminance.py`'s `PerceptualMaskedModulation` is a real,
+worked example of a non-trivial scheme built this way (content-adaptive push
+magnitude for cover-video mode) — a good template for anything beyond a
+flat-margin variant, including how it computes a texture statistic that's
+provably unaffected by its own embedding (see its module docstring and
+[architecture.md](architecture.md)'s cover-video section for why that
+matters).
 
 Then benchmark it against the existing ones **before** wiring it into a
 profile — see [benchmarking.md](benchmarking.md) for the exact experiment

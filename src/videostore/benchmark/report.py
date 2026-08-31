@@ -48,6 +48,11 @@ def _svg_bar_chart(labels: list[str], values: list[float], title: str, unit: str
 def write_html(results: list[BenchmarkResult], path: str) -> None:
     def _row(r: BenchmarkResult) -> str:
         psnr_cell = f"{r.psnr_db:.1f}" if r.psnr_db is not None else "n/a"
+        cover_cell = (
+            f"{r.cover_psnr_db:.1f} / {r.cover_ssim_index:.4f}"
+            if r.cover_psnr_db is not None
+            else ("n/a" if r.cover_video else "-")
+        )
         return (
             "<tr>"
             f"<td>{r.test_file}</td><td>{r.profile}</td><td>{r.modulation}</td>"
@@ -57,6 +62,8 @@ def write_html(results: list[BenchmarkResult], path: str) -> None:
             f"<td>{'PASS' if r.success else 'FAIL'}</td>"
             f"<td>{r.block_error_rate:.4%}</td>"
             f"<td>{psnr_cell}</td>"
+            f"<td>{r.cover_video}{' (looped)' if r.cover_looped else ''}</td>"
+            f"<td>{cover_cell}</td>"
             f"<td>{r.error}</td>"
             "</tr>"
         )
@@ -98,9 +105,16 @@ unless this run used --youtube-url).</p>
 <div class="charts">{chart1}{chart2}</div>
 <table>
 <tr><th>file</th><th>profile</th><th>modulation</th><th>channel</th><th>res@fps</th>
-<th>duration</th><th>payload Mbit/s</th><th>result</th><th>block error rate</th><th>PSNR</th><th>error</th></tr>
+<th>duration</th><th>payload Mbit/s</th><th>result</th><th>block error rate</th><th>PSNR</th>
+<th>cover video</th><th>cover PSNR / SSIM</th><th>error</th></tr>
 {rows}
 </table>
+<p><strong>cover PSNR / SSIM</strong> compares the encoded (pre-channel) output
+against the cover video itself -- this is the "does it look different"
+invisibility metric for cover-video mode, separate from the PSNR column
+(which measures transcode damage from the channel simulation, not embedding
+visibility). Higher is more invisible; there is no established pass/fail
+threshold yet, see docs/benchmarking.md.</p>
 </body></html>"""
     with open(path, "w") as f:
         f.write(html)

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from videostore.container.format import GlobalHeader, HEADER_LEN
-from videostore.modulation import LuminanceBlockModulation
+from videostore.modulation import LuminanceBlockModulation, PerceptualMaskedModulation
 from videostore.modulation.base import ModulationScheme
 
 from .regions import payload_capacity_bits
@@ -23,7 +23,15 @@ from .regions import payload_capacity_bits
 # Fixed by protocol version, NOT stored in the header — the header itself must
 # be readable using only protocol constants + the frame tag (which is
 # resolution-self-describing; see synchronization/frame_tag.py).
-HEADER_MODULATION = LuminanceBlockModulation(block_size=16, margin=48.0)
+HEADER_MODULATION_SYNTHETIC = LuminanceBlockModulation(block_size=16, margin=48.0)
+# Cover-video mode's header frames overwrite the *entire* frame (not just the
+# tag's small corner), so a flat 48.0 margin here would be a much bigger
+# visibility problem than the tag. Perceptually masked, same rationale as
+# TAG_MODULATION_STEALTH (see synchronization/frame_tag.py) — the decoder
+# learns which of the two to use from which TAG_MODULATION variant matched
+# during sync-scan, since both are always paired 1:1 by mode.
+HEADER_MODULATION_STEALTH = PerceptualMaskedModulation(block_size=16, margin=48.0, margin_floor=18.0)
+HEADER_MODULATION = HEADER_MODULATION_SYNTHETIC  # default/backward-compatible name
 
 HEADER_BITS = HEADER_LEN * 8
 
@@ -35,7 +43,7 @@ def header_capacity_per_frame(width: int, height: int) -> int:
 
 def payload_capacity_per_frame(width: int, height: int, modulation: ModulationScheme) -> int:
     cap = modulation.capacity_blocks(width, height)
-    return payload_capacity_bits(width, height, modulation.block_size, cap)
+    return payload_capacity_bits(width, height, modulation.block_size, cap, spread_factor=modulation.spread_factor)
 
 
 def frames_needed_for_payload(payload_bits: int, width: int, height: int, modulation: ModulationScheme) -> int:

@@ -113,8 +113,24 @@ luminance modulation → ffmpeg → .mp4
 - **A benchmark suite** that actually runs encode → channel → decode →
   compare and produces JSON/CSV/HTML reports, because "trust me" isn't a
   spec.
-- **60 automated tests**, including ones that cut real frames out of a real
+- **86 automated tests**, including ones that cut real frames out of a real
   encoded video and check recovery still works.
+- **Experimental cover-video mode** (`--cover-video`): embed into your own
+  existing `.mp4` instead of the synthetic carrier, so the output isn't
+  obviously TV static. A perceptually-masked modulation scheme pushes hard
+  on textured blocks and gently on flat ones, so capacity stays at parity
+  with the synthetic carrier. Three profiles: `stego-safe` (default,
+  cover-vs-encoded SSIM 0.65), `--spread-factor 4` on top of it (SSIM 0.81,
+  no profile change needed), or `stego-invisible` (SSIM ≈0.83, the measured
+  ceiling of this technique — needs ~8x more cover video for the same
+  payload). Honestly, that ceiling is **not full invisibility** — capacity
+  requires every block of every frame to carry data, which is in direct
+  tension with true imperceptibility, and SSIM measurably plateaus around
+  0.83 no matter how far you push it. A high resolution + high spread
+  factor can need tens of GB of temporary disk space for the raw cover
+  extraction; `videostore inspect --cover-video` estimates it up front, and
+  `encode` refuses to start rather than silently filling your disk. See
+  [docs/architecture.md](docs/architecture.md).
 
 ## Install
 
@@ -135,6 +151,10 @@ videostore encode ./my_files -o payload.mp4 --resolution 1080p --profile youtube
 videostore decode --youtube-url "https://youtube.com/watch?v=XXXXXXXX" -o ./restored
 # or, if you already downloaded it:
 videostore decode downloaded.mp4 -o ./restored --ask-password
+
+# experimental: embed into your own video instead of a synthetic carrier
+videostore inspect ./my_files --cover-video vacation.mp4   # check it'll fit first
+videostore encode ./my_files -o payload.mp4 --profile stego-invisible --cover-video vacation.mp4
 ```
 
 Also: `videostore inspect`, `videostore benchmark`, `videostore

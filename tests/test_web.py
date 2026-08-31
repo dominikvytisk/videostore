@@ -212,6 +212,59 @@ def test_websocket_encode_decode_roundtrip_with_live_progress():
     assert report["recovered"] == [{"path": "sub/nested.txt", "size": len(b"nested via explorer ui\n" * 40)}]
 
 
+def test_websocket_encode_with_cover_video_roundtrip():
+    """Exercises the /api/encode/prepare cover_video upload + ws_encode
+    cover_video plumbing end to end (Phase 1 gate for the web UI's carrier
+    toggle)."""
+    import subprocess
+
+    from videostore.video.io import FFMPEG
+
+    import tempfile
+
+    payload = b"cover mode via the web ui\n" * 40
+    with tempfile.NamedTemporaryFile(suffix=".mp4") as cover_f:
+        subprocess.run(
+            [
+                FFMPEG, "-y", "-loglevel", "error",
+                "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=6",
+                "-pix_fmt", "yuv420p", "-c:v", "libx264", "-crf", "18", cover_f.name,
+            ],
+            check=True,
+        )
+        with open(cover_f.name, "rb") as cover_fh:
+            prep = client.post(
+                "/api/encode/prepare",
+                files={
+                    "files": ("payload.txt", io.BytesIO(payload), "text/plain"),
+                    "cover_video": ("cover.mp4", cover_fh, "video/mp4"),
+                },
+            )
+    assert prep.status_code == 200
+    body = prep.json()
+    assert body["has_cover_video"] is True
+    session_id = body["session_id"]
+
+    with client.websocket_connect(f"/ws/encode/{session_id}") as ws:
+        ws.send_json({"resolution": "480p", "profile_name": "youtube-safe", "crf": 20, "x264_preset": "ultrafast"})
+        events = _drain_ws(ws)
+
+    assert events[-1]["type"] == "done"
+    assert events[-1]["report"]["cover_video"] is True
+
+    video_res = client.get(f"/api/encode/{session_id}/download")
+    assert video_res.status_code == 200
+
+    dec_prep = client.post("/api/decode/prepare", files={"video": ("payload.mp4", io.BytesIO(video_res.content), "video/mp4")})
+    dsid = dec_prep.json()["session_id"]
+    with client.websocket_connect(f"/ws/decode/{dsid}") as ws:
+        ws.send_json({})
+        dec_events = _drain_ws(ws)
+    report = dec_events[-1]["report"]
+    assert report["fully_recovered"] is True
+    assert report["recovered"] == [{"path": "payload.txt", "size": len(payload)}]
+
+
 def test_websocket_encode_rejects_unknown_session():
     with client.websocket_connect("/ws/encode/" + "0" * 32) as ws:
         msg = ws.receive_json()
